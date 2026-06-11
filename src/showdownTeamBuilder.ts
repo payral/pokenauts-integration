@@ -23,6 +23,7 @@ const FALLBACK_STATUS_MOVES = [
   'Leech Seed',
   'Protect',
 ];
+const DISALLOWED_FALLBACK_MOVES = ['Explosion', 'Self-Destruct', 'Final Gambit'];
 
 interface ShowdownSpecies {
   exists: boolean;
@@ -212,17 +213,26 @@ function chooseRandomBattleMoves(randomSet: RandomBattleSet): string[] {
 }
 
 function chooseFallbackMoves(dex: ShowdownDex, species: ShowdownSpecies): string[] {
-  const movePool = [...dex.species.getMovePool(species.id)];
+  const standardMovePool = [...dex.species.getMovePool(species.id)];
+  const movePool = standardMovePool.length > 0
+    ? standardMovePool
+    : [...dex.species.getMovePool(species.id, true)];
+  const movePoolIds = new Set(movePool);
   const damagingMoves = movePool
     .map(moveId => dex.moves.get(moveId))
     .filter(move => isUsefulDamagingMove(move))
     .sort((a, b) => scoreMove(b, species) - scoreMove(a, species))
     .map(move => move.name);
   const statusMoves = FALLBACK_STATUS_MOVES.filter(moveName =>
-    movePool.includes(toId(moveName))
+    movePoolIds.has(toId(moveName))
   );
+  const anyLegalMoves = movePool
+    .map(moveId => dex.moves.get(moveId))
+    .filter(move => isLegalFallbackMove(move))
+    .sort((a, b) => scoreMove(b, species) - scoreMove(a, species))
+    .map(move => move.name);
 
-  return uniqueMoves([...damagingMoves.slice(0, 4), ...statusMoves]).slice(0, 4);
+  return uniqueMoves([...damagingMoves.slice(0, 4), ...statusMoves, ...anyLegalMoves]).slice(0, 4);
 }
 
 function isUsefulDamagingMove(move: ShowdownMove): boolean {
@@ -233,7 +243,15 @@ function isUsefulDamagingMove(move: ShowdownMove): boolean {
     !move.isNonstandard &&
     move.accuracy !== true &&
     move.accuracy >= 70 &&
-    !['Explosion', 'Self-Destruct', 'Final Gambit'].includes(move.name)
+    !DISALLOWED_FALLBACK_MOVES.includes(move.name)
+  );
+}
+
+function isLegalFallbackMove(move: ShowdownMove): boolean {
+  return (
+    move.exists &&
+    !move.isNonstandard &&
+    !DISALLOWED_FALLBACK_MOVES.includes(move.name)
   );
 }
 

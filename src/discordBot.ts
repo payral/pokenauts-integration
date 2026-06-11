@@ -57,6 +57,9 @@ export async function startDiscordBot(
         config.discordMatchChannelId || `#${config.discordMatchChannelName}`
       }`
     );
+    console.log(
+      `[discord] Result announcements: ${formatResultChannelConfig(config)}`
+    );
   });
 
   client.on('interactionCreate', async interaction => {
@@ -87,7 +90,7 @@ export async function startDiscordBot(
       if (!interaction.isChatInputCommand()) return;
 
       if (interaction.commandName === 'help') {
-        await handleHelpCommand(interaction);
+        await handleHelpCommand(interaction, config);
         return;
       }
 
@@ -124,10 +127,13 @@ export async function startDiscordBot(
   return client;
 }
 
-async function handleHelpCommand(interaction: ChatInputCommandInteraction): Promise<void> {
+async function handleHelpCommand(
+  interaction: ChatInputCommandInteraction,
+  config: AppConfig
+): Promise<void> {
   await interaction.reply({
     content: [
-      'AshKetchup help: your Pokenauts-to-Showdown battle buddy is ready.',
+      `${pokeball(config)} AshKetchup help: your Pokenauts-to-Showdown battle buddy is ready.`,
       '',
       'AshKetchup commands:',
       '`/ashketchup challenge opponent:@user wager:50` - start a 3v3 match card.',
@@ -152,6 +158,7 @@ async function handleHelpCommand(interaction: ChatInputCommandInteraction): Prom
       'Battle flow: run `@Pokenauts pokemon`, page until your 3 chosen slots show up, then click Submit Team on the match card.',
       'AshKetchup battles cap every Pokemon at level 50, even if your Pokenauts Pokemon is higher level.',
       'Movesets are preset by AshKetchup from local Showdown data, so you only pick the 3 Pokemon, not their moves.',
+      'Teams are hidden before battle starts and only reveal as Pokemon enter battle.',
       'Note: Pokenauts rejects trades with AshKetchup, so wagered coins are still handled by the human banker.',
     ].join('\n'),
     ephemeral: true,
@@ -184,7 +191,7 @@ async function handlePokenautsChallengeCommand(
 
   await interaction.reply({
     content:
-      `A challenger appeared! Created AshKetchup match ${match.id} against ${opponent}. ` +
+      `${pokeball(config)} A challenger appeared! Created AshKetchup match ${match.id} against ${opponent}. ` +
       `Posted it in ${formatChannelName(channel)}.`,
     ephemeral: true,
   });
@@ -223,7 +230,7 @@ async function handlePokenautsTestBotCommand(
 
   await interaction.reply({
     content:
-      `Training battle queued! Created solo test match ${match.id}. Run \`@Pokenauts pokemon\`, submit your 3 slots, ` +
+      `${pokeball(config)} Training battle queued! Created solo test match ${match.id}. Run \`@Pokenauts pokemon\`, submit your 3 slots, ` +
       `then ${config.showdownTestBotAUsername} will challenge your submitted Showdown username.`,
     ephemeral: true,
   });
@@ -262,11 +269,11 @@ async function handlePokenautsRoomCommand(
   await showdownHarness.connectCoordinator();
   showdownHarness.coordinator.joinRoom(roomId);
   const updatedMatch = pokenautsMatches.watchRoom(match.id, roomId);
-  await updatePokenautsMatchMessage(interaction.client, updatedMatch);
+  await updatePokenautsMatchMessage(interaction.client, config, updatedMatch);
 
   await interaction.reply({
     content:
-      `AshKetchup is watching! This match is happening. Watch here: ` +
+      `${pokeball(config)} AshKetchup is watching! This match is happening. Watch here: ` +
       `${buildShowdownRoomUrl(updatedMatch)}`,
     ephemeral: true,
   });
@@ -330,11 +337,11 @@ async function handlePokenautsTeamModal(
     showdownUsername,
     entries
   );
-  await updatePokenautsMatchMessage(interaction.client, updatedMatch);
+  await updatePokenautsMatchMessage(interaction.client, config, updatedMatch);
 
   await interaction.reply({
     content:
-      `Team locked in for match ${match.id}: ` +
+      `${pokeball(config)} Team locked in for match ${match.id}: ` +
       entries
         .map(entry => `${entry.slot}: ${entry.species} L${Math.min(entry.level, 50)}`)
         .join(', ') +
@@ -383,9 +390,9 @@ async function handlePokenautsMatchButton(
     }
 
     const updatedMatch = pokenautsMatches.confirmEscrow(match.id);
-    await updatePokenautsMatchMessage(interaction.client, updatedMatch);
+    await updatePokenautsMatchMessage(interaction.client, config, updatedMatch);
     await interaction.reply({
-      content: `Coins marked held for match ${match.id}.`,
+      content: `${pokeball(config)} Coins marked held for match ${match.id}.`,
       ephemeral: true,
     });
     return;
@@ -398,9 +405,9 @@ async function handlePokenautsMatchButton(
     }
 
     const updatedMatch = pokenautsMatches.markRefunded(match.id);
-    await updatePokenautsMatchMessage(interaction.client, updatedMatch);
+    await updatePokenautsMatchMessage(interaction.client, config, updatedMatch);
     await interaction.reply({
-      content: `Match ${match.id} marked refunded.`,
+      content: `${pokeball(config)} Match ${match.id} marked refunded.`,
       ephemeral: true,
     });
     return;
@@ -413,9 +420,9 @@ async function handlePokenautsMatchButton(
     }
 
     const updatedMatch = pokenautsMatches.confirmPayout(match.id);
-    await updatePokenautsMatchMessage(interaction.client, updatedMatch);
+    await updatePokenautsMatchMessage(interaction.client, config, updatedMatch);
     await interaction.reply({
-      content: `Payment marked complete for match ${match.id}.`,
+      content: `${pokeball(config)} Payment marked complete for match ${match.id}.`,
       ephemeral: true,
     });
     return;
@@ -637,7 +644,7 @@ function wirePokenautsShowdownEvents(
       );
       if (!match) return;
 
-      updatePokenautsMatchMessage(client, match).catch(error => {
+      updatePokenautsMatchMessage(client, config, match).catch(error => {
         console.warn(`[discord] Could not update match ${match.id}: ${formatError(error)}`);
       });
       announcePokenautsResult(client, config, pokenautsMatches, match).catch(error => {
@@ -651,10 +658,10 @@ function wirePokenautsShowdownEvents(
     if (!match) return;
 
     const updatedMatch = pokenautsMatches.watchRoom(match.id, roomId);
-    updatePokenautsMatchMessage(client, updatedMatch).catch(error => {
+    updatePokenautsMatchMessage(client, config, updatedMatch).catch(error => {
       console.warn(`[discord] Could not update solo test match ${match.id}: ${formatError(error)}`);
     });
-    announceSoloRoomDetected(client, updatedMatch).catch(error => {
+    announceSoloRoomDetected(client, config, updatedMatch).catch(error => {
       console.warn(`[discord] Could not announce solo room ${roomId}: ${formatError(error)}`);
     });
   });
@@ -679,9 +686,9 @@ async function maybeStartSoloBotChallenge(
       match.format
     );
     const updatedMatch = pokenautsMatches.markBotChallengeSent(match.id);
-    await updatePokenautsMatchMessage(client, updatedMatch);
+    await updatePokenautsMatchMessage(client, config, updatedMatch);
     return (
-      `The training bot threw down the gauntlet: ${config.showdownTestBotAUsername} challenged ${humanTeam.showdownUsername}. ` +
+      `${pokeball(config)} The training bot threw down the gauntlet: ${config.showdownTestBotAUsername} challenged ${humanTeam.showdownUsername}. ` +
       'Import your revealed team, accept the challenge, then forfeit when you want the bot-win test result.'
     );
   } catch (error) {
@@ -689,7 +696,11 @@ async function maybeStartSoloBotChallenge(
   }
 }
 
-async function announceSoloRoomDetected(client: Client, match: PokenautsMatch): Promise<void> {
+async function announceSoloRoomDetected(
+  client: Client,
+  config: AppConfig,
+  match: PokenautsMatch
+): Promise<void> {
   if (!match.discordChannelId || !match.testMode || !match.roomId) return;
 
   const channel = await client.channels.fetch(match.discordChannelId);
@@ -697,7 +708,7 @@ async function announceSoloRoomDetected(client: Client, match: PokenautsMatch): 
 
   console.log(`Solo test match ${match.id}: AshKetchup is watching ${match.roomId}.`);
   await channel.send(
-    `AshKetchup is watching! This match is happening. Watch here: ${buildShowdownRoomUrl(match)}`
+    `${pokeball(config)} AshKetchup is watching! This match is happening. Watch here: ${buildShowdownRoomUrl(match)}`
   );
 }
 
@@ -738,6 +749,7 @@ function buildSoloTestBotTeam(config: AppConfig): GeneratedPokenautsTeam {
 
 async function updatePokenautsMatchMessage(
   client: Client,
+  config: AppConfig,
   match: PokenautsMatch
 ): Promise<void> {
   if (!match.discordChannelId || !match.discordMessageId) return;
@@ -747,7 +759,7 @@ async function updatePokenautsMatchMessage(
 
   const message = await channel.messages.fetch(match.discordMessageId);
   await message.edit({
-    content: buildPokenautsPublicMatchMessage(match),
+    content: buildPokenautsPublicMatchMessage(match, config),
     components: buildPokenautsMatchComponents(match),
   });
 }
@@ -760,11 +772,100 @@ async function announcePokenautsResult(
 ): Promise<void> {
   if (match.resultPosted || !match.discordChannelId) return;
 
-  const channel = await client.channels.fetch(match.discordChannelId);
-  if (!(channel instanceof TextChannel)) return;
+  const channels = await resolveResultChannels(client, config, match);
+  if (channels.length === 0) {
+    console.warn(`[discord] Could not resolve any result channels for match ${match.id}`);
+    return;
+  }
 
-  await channel.send(buildPokenautsResultMessage(match, config));
+  const resultMessage = buildPokenautsResultMessage(match, config);
+  for (const channel of channels) {
+    try {
+      await channel.send(resultMessage);
+    } catch (error) {
+      console.warn(
+        `[discord] Could not send result for match ${match.id} to #${channel.name}: ${formatError(error)}`
+      );
+    }
+  }
   pokenautsMatches.markResultPosted(match.id);
+}
+
+async function resolveResultChannels(
+  client: Client,
+  config: AppConfig,
+  match: PokenautsMatch
+): Promise<TextChannel[]> {
+  const channels = new Map<string, TextChannel>();
+  const hasExplicitResultChannels =
+    config.discordResultChannelIds.length > 0 ||
+    config.discordResultChannelNames.length > 0;
+
+  if (!hasExplicitResultChannels && match.discordChannelId) {
+    await addTextChannelById(client, channels, match.discordChannelId);
+    return [...channels.values()];
+  }
+
+  for (const channelId of config.discordResultChannelIds) {
+    await addTextChannelById(client, channels, channelId);
+  }
+
+  if (config.discordResultChannelNames.length > 0) {
+    await addTextChannelsByName(client, config, channels);
+  }
+
+  return [...channels.values()];
+}
+
+async function addTextChannelById(
+  client: Client,
+  channels: Map<string, TextChannel>,
+  channelId: string
+): Promise<void> {
+  try {
+    const channel = await client.channels.fetch(channelId);
+    if (channel instanceof TextChannel) {
+      channels.set(channel.id, channel);
+      return;
+    }
+    console.warn(`[discord] Result channel ${channelId} is not a text channel`);
+  } catch (error) {
+    console.warn(`[discord] Could not fetch result channel ${channelId}: ${formatError(error)}`);
+  }
+}
+
+async function addTextChannelsByName(
+  client: Client,
+  config: AppConfig,
+  channels: Map<string, TextChannel>
+): Promise<void> {
+  const guild = config.discordGuildId
+    ? await client.guilds.fetch(config.discordGuildId)
+    : client.guilds.cache.first();
+
+  if (!guild) {
+    console.warn('[discord] Cannot resolve named result channels without a guild');
+    return;
+  }
+
+  const guildChannels = await guild.channels.fetch();
+  const wantedNames = new Set(config.discordResultChannelNames.map(name => normalizeChannelName(name)));
+
+  for (const channel of guildChannels.values()) {
+    if (!(channel instanceof TextChannel)) continue;
+    if (wantedNames.has(normalizeChannelName(channel.name))) {
+      channels.set(channel.id, channel);
+    }
+  }
+
+  for (const name of wantedNames) {
+    const found = [...channels.values()].some(
+      channel => normalizeChannelName(channel.name) === name
+    );
+    if (!found) {
+      console.warn(`[discord] Could not find result channel named #${name}`);
+    }
+  }
 }
 
 function buildPokenautsPublicMatchMessage(
@@ -781,7 +882,7 @@ function buildPokenautsPublicMatchMessage(
       : 'Banker: not needed';
 
   return [
-    `${match.testMode ? 'Training battle!' : 'A challenger appeared!'} AshKetchup Showdown 3v3: ${match.id}`,
+    `${pokeball(config)} ${match.testMode ? 'Training battle!' : 'A challenger appeared!'} AshKetchup Showdown 3v3: ${match.id}`,
     `<@${match.challengerDiscordId}> vs <@${match.opponentDiscordId}>`,
     formatWagerLine(match),
     match.testMode
@@ -790,7 +891,7 @@ function buildPokenautsPublicMatchMessage(
     `Status: ${formatMatchStatus(match.status)}`,
     bankerLine,
     `Coins: ${match.wager === 0 ? 'not needed' : match.escrowConfirmed ? 'held by banker' : 'waiting for banker'}`,
-    `Format: ${match.format}`,
+    `Format: ${formatMatchFormat(match)}`,
     `Showdown: ${match.showdownUrl}`,
     '',
     'Steps:',
@@ -804,12 +905,16 @@ function buildPokenautsPublicMatchMessage(
     match.testMode
       ? '4. Click Reveal Team, import privately, accept the bot challenge, then forfeit to test bot-win payment text.'
       : '4. Players click Reveal Team, import privately, then start the Showdown battle.',
+    'Teams stay hidden before battle and reveal only as Pokemon enter play.',
+    hasHiddenTeamPreview(match.format)
+      ? `Use the private /challenge command exactly as shown after Reveal Team; plain ${formatTeambuilderFormat(match.format)} may show Team Preview.`
+      : '',
     match.testMode
       ? '5. AshKetchup auto-detects the bot battle room; `/ashketchup room` is only needed if auto-detect misses it.'
       : '5. Use `/ashketchup room` with the battle room id so AshKetchup can watch the result.',
     '',
-    `Challenger team: ${formatSubmittedTeam(challengerTeam)}`,
-    `Opponent team: ${formatSubmittedTeam(opponentTeam)}`,
+    `Challenger team: ${formatTeamSelectionStatus(challengerTeam)}`,
+    `Opponent team: ${formatTeamSelectionStatus(opponentTeam)}`,
     `Battle room: ${match.roomId || 'not set'}`,
     formatWinnerLine(match),
     formatAuditLine(match),
@@ -876,11 +981,14 @@ function buildPrivatePokenautsTeamMessage(
       : `Accept the challenge from ${opponentTeam.showdownUsername} in ${match.format}.`;
 
   return [
-    `Your Pokenauts 3v3 match: ${match.id}`,
+    `${pokeball()} Your Pokenauts 3v3 match: ${match.id}`,
     `Showdown link: ${match.showdownUrl}`,
     `Your Showdown username: ${team.showdownUsername}`,
     `Opponent: ${opponentTeam.showdownUsername}`,
     challengeInstruction,
+    hasHiddenTeamPreview(match.format)
+      ? 'Use that exact /challenge command so Showdown skips Team Preview and keeps the selected 3 hidden.'
+      : '',
     match.testMode
       ? 'For the solo test, AshKetchup should auto-detect the battle room after you accept.'
       : `After the battle starts, submit the room id with /ashketchup room match_id:${match.id} room_id:<battle-room-id>.`,
@@ -893,7 +1001,7 @@ function buildPrivatePokenautsTeamMessage(
       )
       .join('\n'),
     '',
-    `Import this team in Teambuilder for ${match.format}:`,
+    `Import this team in Teambuilder for ${formatTeambuilderFormat(match.format)}:`,
     '```',
     team.importText,
     '```',
@@ -911,20 +1019,24 @@ function buildPokenautsResultMessage(match: PokenautsMatch, config: AppConfig): 
       : `Wager output preview: banker would pay ${match.pot} Pokecoins to ${winner}.`;
 
     return [
-      `Training battle ${match.id} is in the books.`,
+      `${pokeball(config)} Training battle ${match.id} is in the books.`,
       `Winner: ${match.tied ? 'tie' : winner}`,
       payoutPreview,
       'No real Pokecoins were moved for this solo test.',
+      '',
+      formatResultTeams(match),
       formatAuditLine(match),
     ].join('\n');
   }
 
   if (match.tied) {
     return [
-      `AshKetchup match ${match.id} ended in a tie. The crowd goes quiet.`,
+      `${pokeball(config)} AshKetchup match ${match.id} ended in a tie. The crowd goes quiet.`,
       match.wager === 0
         ? 'No wager was set, so no Pokecoin refund is needed.'
         : `Banker ${formatBanker(config)}: refund ${match.wager} Pokecoins to each player.`,
+      '',
+      formatResultTeams(match),
       formatAuditLine(match),
     ].join('\n');
   }
@@ -941,8 +1053,10 @@ function buildPokenautsResultMessage(match: PokenautsMatch, config: AppConfig): 
       : 'Audit passed: no unexpected Pokemon or levels detected.';
 
   return [
-    `AshKetchup match ${match.id} winner: ${winner}. Victory road starts here.`,
+    `${pokeball(config)} AshKetchup match ${match.id} winner: ${winner}. Victory road starts here.`,
     payoutInstruction,
+    '',
+    formatResultTeams(match),
     auditWarning,
   ].join('\n');
 }
@@ -998,11 +1112,43 @@ function buildPrivateTeamMessage(match: HumanMatch, playerKey: 'a' | 'b'): strin
   ].join('\n');
 }
 
-function formatSubmittedTeam(team: PokenautsMatch['teams'][PokenautsPlayerKey]): string {
+function formatTeamSelectionStatus(team: PokenautsMatch['teams'][PokenautsPlayerKey]): string {
+  return team ? 'selected' : 'waiting';
+}
+
+function formatResultTeams(match: PokenautsMatch): string {
+  if (match.tied || !match.winnerDiscordId) {
+    return [
+      'Teams:',
+      `Challenger: ${formatResultTeam(match, 'challenger')}`,
+      `Opponent: ${formatResultTeam(match, 'opponent')}`,
+    ].join('\n');
+  }
+
+  const winnerKey = match.winnerDiscordId === match.challengerDiscordId
+    ? 'challenger'
+    : 'opponent';
+  const loserKey = winnerKey === 'challenger' ? 'opponent' : 'challenger';
+
+  return [
+    'Teams:',
+    `Winner: ${formatResultTeam(match, winnerKey)}`,
+    `Loser: ${formatResultTeam(match, loserKey)}`,
+  ].join('\n');
+}
+
+function formatResultTeam(match: PokenautsMatch, playerKey: PokenautsPlayerKey): string {
+  const team = match.teams[playerKey];
   if (!team) return 'not submitted';
-  return `${team.showdownUsername} | ${team.expectedPokemon
-    .map(pokemon => `${pokemon.slot}:${pokemon.species} L${pokemon.showdownLevel}`)
-    .join(', ')}`;
+
+  const discordId = playerKey === 'challenger'
+    ? match.challengerDiscordId
+    : match.opponentDiscordId;
+  const pokemon = team.expectedPokemon
+    .map(entry => `${entry.species} L${entry.showdownLevel}`)
+    .join(', ');
+
+  return `<@${discordId}> (${team.showdownUsername}) - ${pokemon}`;
 }
 
 function formatMatchStatus(status: PokenautsMatch['status']): string {
@@ -1054,9 +1200,44 @@ function formatChannelName(channel: TextChannel): string {
   return `#${channel.name}`;
 }
 
+function formatResultChannelConfig(config: AppConfig): string {
+  const channels = [
+    ...config.discordResultChannelIds.map(channelId => `id:${channelId}`),
+    ...config.discordResultChannelNames.map(channelName => `#${channelName}`),
+  ];
+
+  if (channels.length === 0) {
+    return 'match channel only';
+  }
+
+  return channels.join(', ');
+}
+
+function normalizeChannelName(name: string): string {
+  return name.trim().replace(/^#/, '').toLowerCase();
+}
+
+function pokeball(config?: Pick<AppConfig, 'discordPokeballEmoji'>): string {
+  return config?.discordPokeballEmoji || '<:pokeball:1510466501482905690>';
+}
+
 function buildShowdownRoomUrl(match: Pick<PokenautsMatch, 'showdownUrl' | 'roomId'>): string {
   const baseUrl = match.showdownUrl.replace(/\/+$/, '');
   return match.roomId ? `${baseUrl}/${match.roomId}` : baseUrl;
+}
+
+function formatMatchFormat(match: Pick<PokenautsMatch, 'format'>): string {
+  if (!hasHiddenTeamPreview(match.format)) return match.format;
+  return `${match.format} (hidden teams)`;
+}
+
+function formatTeambuilderFormat(format: string): string {
+  return format.split('@@@', 1)[0];
+}
+
+function hasHiddenTeamPreview(format: string): boolean {
+  return format.toLowerCase().includes('!teampreview') ||
+    format.toLowerCase().includes('!team preview');
 }
 
 function formatError(error: unknown): string {

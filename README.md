@@ -24,6 +24,7 @@ SHOWDOWN_TESTBOT_A_PASSWORD=
 
 SHOWDOWN_TEST_FORMAT=gen9anythinggoes
 SHOWDOWN_POKENAUTS_FORMAT=gen9customgame
+SHOWDOWN_HIDE_TEAM_PREVIEW=true
 SHOWDOWN_ROOT=../selfhosted-ps
 
 DISCORD_TOKEN=
@@ -32,8 +33,13 @@ DISCORD_GUILD_ID=
 DISCORD_BANKER_USER_ID=
 DISCORD_MATCH_CHANNEL_ID=
 DISCORD_MATCH_CHANNEL_NAME=pokemon-in-space
+DISCORD_RESULT_CHANNEL_IDS=
+DISCORD_RESULT_CHANNEL_NAMES=
+DISCORD_POKEBALL_EMOJI=<:pokeball:1510466501482905690>
 POKENAUTS_MESSAGE_PROBE=false
 ```
+
+Use the full Discord token for `DISCORD_POKEBALL_EMOJI`, not the human shorthand `:pokeball:`.
 
 The API runs without Discord credentials. If `DISCORD_TOKEN` is missing, the service logs:
 
@@ -206,11 +212,24 @@ DISCORD_CLIENT_ID=your-application-client-id
 DISCORD_GUILD_ID=your-server-id
 DISCORD_BANKER_USER_ID=trusted-human-banker-user-id
 DISCORD_MATCH_CHANNEL_NAME=pokemon-in-space
+DISCORD_RESULT_CHANNEL_IDS=pokemon-in-space-channel-id,commons-channel-id
+DISCORD_POKEBALL_EMOJI=<:pokeball:1510466501482905690>
 SHOWDOWN_POKENAUTS_FORMAT=gen9customgame
+SHOWDOWN_HIDE_TEAM_PREVIEW=true
 SHOWDOWN_ROOT=../selfhosted-ps
 ```
 
+`DISCORD_POKEBALL_EMOJI` should be `<:pokeball:1510466501482905690>`. Avoid `:pokeball:` because Discord only expands that shorthand for humans typing in the client, not for bot API messages.
+
 `DISCORD_MATCH_CHANNEL_ID` is optional but recommended. If set, the bot posts there directly instead of searching by channel name.
+
+`DISCORD_RESULT_CHANNEL_IDS` is optional and controls where final battle results are posted. To report victories in both `#pokemon-in-space` and `#commons`, copy both Discord channel IDs and set them comma-separated:
+
+```env
+DISCORD_RESULT_CHANNEL_IDS=825872130951872512,commons-channel-id
+```
+
+If `DISCORD_RESULT_CHANNEL_IDS` and `DISCORD_RESULT_CHANNEL_NAMES` are both empty, AshKetchup posts results only in the match channel.
 
 ### Pokenauts Message Probe
 
@@ -279,6 +298,9 @@ Beginner notes:
 - Rare Candies can be bought with Pokecoins and used to level the selected Pokemon faster.
 - AshKetchup Showdown matches cap every selected Pokemon at level 50.
 - AshKetchup generates preset movesets from local Showdown data, so players only pick the 3 Pokemon, not their moves.
+- AshKetchup removes Showdown Team Preview for Pokenauts matches, so the selected 3 stay hidden until Pokemon enter battle.
+- The public match card only shows whether each player has selected a team; it does not reveal slots, species, or Showdown usernames.
+- Players should use the exact private `/challenge ..., gen9customgame@@@!teampreview` instruction from **Reveal Team** instead of plain Custom Game from the dropdown.
 
 ### Pokenauts Inventory 3v3 Flow
 
