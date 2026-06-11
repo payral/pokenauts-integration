@@ -17,6 +17,7 @@ import {
 import {AppConfig} from './config';
 import {PokenautsInventoryEntry, PokenautsInventoryTracker} from './pokenautsInventory';
 import {
+  DiscordMessageRef,
   PokenautsMatch,
   PokenautsMatchStore,
   PokenautsPlayerKey,
@@ -159,7 +160,7 @@ async function handleHelpCommand(
       'AshKetchup battles cap every Pokemon at level 50, even if your Pokenauts Pokemon is higher level.',
       'Movesets are preset by AshKetchup from local Showdown data, so you only pick the 3 Pokemon, not their moves.',
       'Teams are hidden before battle starts and only reveal as Pokemon enter battle.',
-      'Note: Pokenauts rejects trades with AshKetchup, so wagered coins are still handled by the human banker.',
+      'Wagers are player-to-player: after AshKetchup posts the winner, the loser pays the winner with a Pokenauts trade.',
     ].join('\n'),
     ephemeral: true,
   });
@@ -383,48 +384,18 @@ async function handlePokenautsMatchButton(
     return;
   }
 
-  if (action === 'escrow') {
-    if (!isBanker(interaction.user.id, config)) {
-      await interaction.reply({content: 'Only the configured banker can do that.', ephemeral: true});
-      return;
-    }
-
-    const updatedMatch = pokenautsMatches.confirmEscrow(match.id);
-    await updatePokenautsMatchMessage(interaction.client, config, updatedMatch);
-    await interaction.reply({
-      content: `${pokeball(config)} Coins marked held for match ${match.id}.`,
-      ephemeral: true,
-    });
+  if (action === 'paid') {
+    await confirmPokenautsWagerPaid(interaction, config, pokenautsMatches, match);
     return;
   }
 
-  if (action === 'refund') {
-    if (!isBanker(interaction.user.id, config)) {
-      await interaction.reply({content: 'Only the configured banker can do that.', ephemeral: true});
-      return;
-    }
-
-    const updatedMatch = pokenautsMatches.markRefunded(match.id);
-    await updatePokenautsMatchMessage(interaction.client, config, updatedMatch);
-    await interaction.reply({
-      content: `${pokeball(config)} Match ${match.id} marked refunded.`,
-      ephemeral: true,
-    });
+  if (action === 'wagercancel') {
+    await cancelPokenautsWager(interaction, config, pokenautsMatches, match);
     return;
   }
 
-  if (action === 'payout') {
-    if (!isBanker(interaction.user.id, config)) {
-      await interaction.reply({content: 'Only the configured banker can do that.', ephemeral: true});
-      return;
-    }
-
-    const updatedMatch = pokenautsMatches.confirmPayout(match.id);
-    await updatePokenautsMatchMessage(interaction.client, config, updatedMatch);
-    await interaction.reply({
-      content: `${pokeball(config)} Payment marked complete for match ${match.id}.`,
-      ephemeral: true,
-    });
+  if (action === 'tradehelp') {
+    await showPokenautsTradeHelp(interaction, config, match);
     return;
   }
 
@@ -502,21 +473,10 @@ async function revealPokenautsTeam(
     return;
   }
 
-  if (!match.escrowConfirmed) {
-    await interaction.reply({
-      content: 'Waiting for the banker to confirm coins are held before teams unlock.',
-      ephemeral: true,
-    });
-    return;
-  }
-
   const team = match.teams[playerKey];
-  const opponentKey = playerKey === 'challenger' ? 'opponent' : 'challenger';
-  const opponentTeam = match.teams[opponentKey];
-
-  if (!team || !opponentTeam) {
+  if (!team) {
     await interaction.reply({
-      content: 'Both players need to submit teams before reveal.',
+      content: 'Submit your team first, then AshKetchup can reveal your private import text.',
       ephemeral: true,
     });
     return;
@@ -524,6 +484,91 @@ async function revealPokenautsTeam(
 
   await interaction.reply({
     content: buildPrivatePokenautsTeamMessage(match, playerKey),
+    ephemeral: true,
+  });
+}
+
+async function confirmPokenautsWagerPaid(
+  interaction: ButtonInteraction,
+  config: AppConfig,
+  pokenautsMatches: PokenautsMatchStore,
+  match: PokenautsMatch
+): Promise<void> {
+  const validationError = validateWagerResultAction(interaction, match, config);
+  if (validationError) {
+    await interaction.reply({content: validationError, ephemeral: true});
+    return;
+  }
+
+  await interaction.deferReply({ephemeral: true});
+  const updatedMatch = pokenautsMatches.confirmPayout(match.id);
+  await updatePokenautsResultMessages(interaction.client, config, updatedMatch);
+  await interaction.editReply(`${pokeball(config)} Wager marked paid. Scoreboard updated.`);
+}
+
+async function cancelPokenautsWager(
+  interaction: ButtonInteraction,
+  config: AppConfig,
+  pokenautsMatches: PokenautsMatchStore,
+  match: PokenautsMatch
+): Promise<void> {
+  const validationError = validateWagerResultAction(interaction, match, config, {
+    allowTie: true,
+  });
+  if (validationError) {
+    await interaction.reply({content: validationError, ephemeral: true});
+    return;
+  }
+
+  await interaction.deferReply({ephemeral: true});
+  const updatedMatch = pokenautsMatches.cancelWager(match.id);
+  await updatePokenautsResultMessages(interaction.client, config, updatedMatch);
+  await interaction.editReply(`${pokeball(config)} Wager canceled. Scoreboard updated.`);
+}
+
+async function showPokenautsTradeHelp(
+  interaction: ButtonInteraction,
+  config: AppConfig,
+  match: PokenautsMatch
+): Promise<void> {
+  const participants = getWagerParticipants(match);
+  if (!participants || match.wager === 0 || match.testMode) {
+    await interaction.reply({
+      content: 'There are no Pokenauts trade instructions for this match.',
+      ephemeral: true,
+    });
+    return;
+  }
+
+  if (match.wagerCanceled) {
+    await interaction.reply({
+      content: 'This wager was canceled, so no Pokenauts trade is needed.',
+      ephemeral: true,
+    });
+    return;
+  }
+
+  if (match.payoutConfirmed) {
+    await interaction.reply({
+      content: 'This wager is already marked paid.',
+      ephemeral: true,
+    });
+    return;
+  }
+
+  if (
+    interaction.user.id !== participants.winnerDiscordId &&
+    interaction.user.id !== participants.loserDiscordId
+  ) {
+    await interaction.reply({
+      content: 'Only the winner or loser can view the private trade instructions.',
+      ephemeral: true,
+    });
+    return;
+  }
+
+  await interaction.reply({
+    content: buildPokenautsTradeHelpMessage(match, interaction.user.id, config),
     ephemeral: true,
   });
 }
@@ -764,6 +809,29 @@ async function updatePokenautsMatchMessage(
   });
 }
 
+async function updatePokenautsResultMessages(
+  client: Client,
+  config: AppConfig,
+  match: PokenautsMatch
+): Promise<void> {
+  const content = buildPokenautsResultMessage(match, config);
+  const components = buildPokenautsResultComponents(match);
+
+  for (const messageRef of match.resultDiscordMessages) {
+    try {
+      const channel = await client.channels.fetch(messageRef.channelId);
+      if (!(channel instanceof TextChannel)) continue;
+
+      const message = await channel.messages.fetch(messageRef.messageId);
+      await message.edit({content, components});
+    } catch (error) {
+      console.warn(
+        `[discord] Could not update result message ${messageRef.messageId}: ${formatError(error)}`
+      );
+    }
+  }
+}
+
 async function announcePokenautsResult(
   client: Client,
   config: AppConfig,
@@ -779,16 +847,25 @@ async function announcePokenautsResult(
   }
 
   const resultMessage = buildPokenautsResultMessage(match, config);
+  const resultComponents = buildPokenautsResultComponents(match);
+  const sentMessages: DiscordMessageRef[] = [];
   for (const channel of channels) {
     try {
-      await channel.send(resultMessage);
+      const sentMessage = await channel.send({
+        content: resultMessage,
+        components: resultComponents,
+      });
+      sentMessages.push({
+        channelId: sentMessage.channelId,
+        messageId: sentMessage.id,
+      });
     } catch (error) {
       console.warn(
         `[discord] Could not send result for match ${match.id} to #${channel.name}: ${formatError(error)}`
       );
     }
   }
-  pokenautsMatches.markResultPosted(match.id);
+  pokenautsMatches.markResultPosted(match.id, sentMessages);
 }
 
 async function resolveResultChannels(
@@ -874,44 +951,56 @@ function buildPokenautsPublicMatchMessage(
 ): string {
   const challengerTeam = match.teams.challenger;
   const opponentTeam = match.teams.opponent;
-  const bankerLine =
-    match.wager > 0
-      ? config?.discordBankerUserId
-        ? `Banker: <@${config.discordBankerUserId}>`
-        : 'Banker: not configured'
-      : 'Banker: not needed';
+  const roomCommand = `/ashketchup room match_id:${match.id} room_id:<battle-room-id>`;
+  const steps =
+    match.testMode
+      ? [
+          '1. Join Showdown, create a username, and keep this link handy:',
+          match.showdownUrl,
+          '2. Run `@Pokenauts pokemon` in this channel and page until your 3 chosen slots are visible.',
+          '3. Click Submit Team, then Reveal Team to get your private import text.',
+          `4. ${config?.showdownTestBotAUsername || 'PokenautsTestBotA'} auto-challenges after your team is submitted. Import your team, accept the challenge, then forfeit when you want the test result.`,
+        ]
+      : match.wager > 0
+      ? [
+          '1. Join Showdown, create a username, and keep this link handy:',
+          match.showdownUrl,
+          '2. Run `@Pokenauts pokemon` in this channel and page until your 3 chosen slots are visible.',
+          '3. Click Submit Team, enter your Showdown username, then your 3 inventory slot numbers.',
+          `4. Wager agreed: loser pays winner ${match.wager} Pokecoins after AshKetchup posts the result.`,
+          '5. Click Reveal Team, import privately, then use the private `/challenge` command exactly as shown.',
+          'After the battle starts, copy the battle room id from the Showdown URL and run:',
+          '```',
+          roomCommand,
+          '```',
+          'After the result, use the Confirm Paid or Wager Canceled buttons on the result post.',
+        ]
+      : [
+          '1. Join Showdown, create a username, and keep this link handy:',
+          match.showdownUrl,
+          '2. Run `@Pokenauts pokemon` in this channel and page until your 3 chosen slots are visible.',
+          '3. Click Submit Team, then Reveal Team to get your private import text and battle instructions.',
+          '4. Use the private `/challenge` command as shown. After the battle starts, copy the battle room id from the Showdown URL and run:',
+          '```',
+          roomCommand,
+          '```',
+        ];
 
   return [
-    `${pokeball(config)} ${match.testMode ? 'Training battle!' : 'A challenger appeared!'} AshKetchup Showdown 3v3: ${match.id}`,
+    `${pokeball(config)} ${match.testMode ? 'Training battle!' : 'A challenger appeared!'} AshKetchup Showdown 3v3`,
     `<@${match.challengerDiscordId}> vs <@${match.opponentDiscordId}>`,
     formatWagerLine(match),
-    match.testMode
+    match.testMode && match.wager > 0
       ? 'Solo test mode: coins are fake/auto-confirmed and no real Pokecoins should move.'
       : '',
     `Status: ${formatMatchStatus(match.status)}`,
-    bankerLine,
-    `Coins: ${match.wager === 0 ? 'not needed' : match.escrowConfirmed ? 'held by banker' : 'waiting for banker'}`,
     `Format: ${formatMatchFormat(match)}`,
-    `Showdown: ${match.showdownUrl}`,
     '',
     'Steps:',
-    '1. Each player runs `@Pokenauts pokemon` in this channel and pages until their 3 chosen slots are visible.',
-    '2. Each player clicks Submit Team and enters Showdown username plus 3 inventory slot numbers.',
+    ...steps,
     match.testMode
-      ? `3. ${config?.showdownTestBotAUsername || 'PokenautsTestBotA'} auto-challenges after your team is submitted.`
-      : match.wager === 0
-      ? '3. No wager was set, so no coin holding is needed.'
-      : '3. Banker holds the Pokecoins and clicks Confirm Coins Held.',
-    match.testMode
-      ? '4. Click Reveal Team, import privately, accept the bot challenge, then forfeit to test bot-win payment text.'
-      : '4. Players click Reveal Team, import privately, then start the Showdown battle.',
-    'Teams stay hidden before battle and reveal only as Pokemon enter play.',
-    hasHiddenTeamPreview(match.format)
-      ? `Use the private /challenge command exactly as shown after Reveal Team; plain ${formatTeambuilderFormat(match.format)} may show Team Preview.`
+      ? 'AshKetchup should auto-detect the battle room after you accept.'
       : '',
-    match.testMode
-      ? '5. AshKetchup auto-detects the bot battle room; `/ashketchup room` is only needed if auto-detect misses it.'
-      : '5. Use `/ashketchup room` with the battle room id so AshKetchup can watch the result.',
     '',
     `Challenger team: ${formatTeamSelectionStatus(challengerTeam)}`,
     `Opponent team: ${formatTeamSelectionStatus(opponentTeam)}`,
@@ -939,29 +1028,12 @@ function buildPokenautsMatchComponents(
         .setStyle(ButtonStyle.Secondary)
         .setDisabled(match.status === 'ended' || match.status === 'refunded')
     ),
-    new ActionRowBuilder<ButtonBuilder>().addComponents(
-      new ButtonBuilder()
-        .setCustomId(`pnm:escrow:${match.id}`)
-        .setLabel('Confirm Coins Held')
-        .setStyle(ButtonStyle.Success)
-        .setDisabled(match.escrowConfirmed || match.status === 'ended' || match.status === 'refunded'),
-      new ButtonBuilder()
-        .setCustomId(`pnm:payout:${match.id}`)
-        .setLabel('Confirm Paid')
-        .setStyle(ButtonStyle.Success)
-        .setDisabled(match.wager === 0 || match.status !== 'ended' || match.payoutConfirmed),
-      new ButtonBuilder()
-        .setCustomId(`pnm:refund:${match.id}`)
-        .setLabel('Mark Refunded')
-        .setStyle(ButtonStyle.Danger)
-        .setDisabled(match.status === 'ended' || match.status === 'refunded')
-    ),
   ];
 }
 
 function formatWagerLine(match: PokenautsMatch): string {
-  if (match.wager === 0) return 'Wager: none';
-  return `Wager: ${match.wager} Pokecoins each | Pot: ${match.pot} Pokecoins`;
+  if (match.wager === 0) return '';
+  return `Wager: ${match.wager} Pokecoins | loser pays winner after the result`;
 }
 
 function buildPrivatePokenautsTeamMessage(
@@ -971,27 +1043,35 @@ function buildPrivatePokenautsTeamMessage(
   const team = match.teams[playerKey];
   const opponentKey = playerKey === 'challenger' ? 'opponent' : 'challenger';
   const opponentTeam = match.teams[opponentKey];
-  if (!team || !opponentTeam) return 'Both teams are not ready yet.';
+  if (!team) return 'Submit your team first.';
 
-  const challengeInstruction =
-    match.testMode && playerKey === 'challenger'
-      ? `Accept the challenge from ${opponentTeam.showdownUsername} in ${match.format}.`
-      : playerKey === 'challenger'
-      ? `Challenge ${opponentTeam.showdownUsername} with: /challenge ${opponentTeam.showdownUsername}, ${match.format}`
-      : `Accept the challenge from ${opponentTeam.showdownUsername} in ${match.format}.`;
+  const challengeCommand = opponentTeam
+    ? `/challenge ${opponentTeam.showdownUsername}, ${match.format}`
+    : null;
+  const roomCommand = `/ashketchup room match_id:${match.id} room_id:<battle-room-id>`;
 
   return [
     `${pokeball()} Your Pokenauts 3v3 match: ${match.id}`,
     `Showdown link: ${match.showdownUrl}`,
     `Your Showdown username: ${team.showdownUsername}`,
-    `Opponent: ${opponentTeam.showdownUsername}`,
-    challengeInstruction,
-    hasHiddenTeamPreview(match.format)
-      ? 'Use that exact /challenge command so Showdown skips Team Preview and keeps the selected 3 hidden.'
-      : '',
+    opponentTeam ? `Opponent: ${opponentTeam.showdownUsername}` : 'Opponent: waiting for team submission',
+    opponentTeam && (match.testMode && playerKey === 'challenger')
+      ? `Accept the challenge from ${opponentTeam.showdownUsername} in ${match.format}.`
+      : opponentTeam && playerKey === 'challenger'
+      ? ['Challenge with this exact command:', '```', challengeCommand, '```'].join('\n')
+      : opponentTeam
+      ? `Accept the challenge from ${opponentTeam.showdownUsername} in ${match.format}.`
+      : 'Your team is ready. The exact battle command appears here after the other player submits.',
     match.testMode
       ? 'For the solo test, AshKetchup should auto-detect the battle room after you accept.'
-      : `After the battle starts, submit the room id with /ashketchup room match_id:${match.id} room_id:<battle-room-id>.`,
+      : [
+          'After the battle starts, copy the battle room id from the Showdown URL.',
+          'Example: if the URL ends in `/battle-gen9customgame-123`, the room id is `battle-gen9customgame-123`.',
+          'Then run:',
+          '```',
+          roomCommand,
+          '```',
+        ].join('\n'),
     '',
     'Selected Pokenauts Pokemon:',
     team.expectedPokemon
@@ -1013,52 +1093,76 @@ function buildPokenautsResultMessage(match: PokenautsMatch, config: AppConfig): 
     const winner =
       match.winnerDiscordId ? `<@${match.winnerDiscordId}>` : match.winnerShowdownUsername || 'unknown';
     const payoutPreview = match.wager === 0
-      ? 'Wager output preview: no wager was set, so no Pokecoins would move.'
+      ? ''
       : match.tied
       ? `Wager output preview: refund ${match.wager} Pokecoins to the human player.`
-      : `Wager output preview: banker would pay ${match.pot} Pokecoins to ${winner}.`;
+      : `Wager output preview: loser would pay ${winner} ${match.wager} Pokecoins.`;
 
     return [
-      `${pokeball(config)} Training battle ${match.id} is in the books.`,
+      `${pokeball(config)} Training battle is in the books.`,
       `Winner: ${match.tied ? 'tie' : winner}`,
       payoutPreview,
-      'No real Pokecoins were moved for this solo test.',
+      match.wager > 0 ? 'No real Pokecoins were moved for this solo test.' : '',
       '',
       formatResultTeams(match),
       formatAuditLine(match),
-    ].join('\n');
+    ].filter(Boolean).join('\n');
   }
 
   if (match.tied) {
     return [
-      `${pokeball(config)} AshKetchup match ${match.id} ended in a tie. The crowd goes quiet.`,
+      `${pokeball(config)} AshKetchup match ended in a tie. The crowd goes quiet.`,
       match.wager === 0
-        ? 'No wager was set, so no Pokecoin refund is needed.'
-        : `Banker ${formatBanker(config)}: refund ${match.wager} Pokecoins to each player.`,
+        ? ''
+        : 'Wager canceled: tied battle.',
       '',
       formatResultTeams(match),
       formatAuditLine(match),
-    ].join('\n');
+    ].filter(Boolean).join('\n');
   }
 
   const winner =
     match.winnerDiscordId ? `<@${match.winnerDiscordId}>` : match.winnerShowdownUsername || 'unknown';
-  const payoutInstruction =
-    match.wager === 0
-      ? 'No wager was set, so no Pokecoin payment is needed.'
-      : `Banker ${formatBanker(config)}: pay ${match.pot} Pokecoins to ${winner}.`;
   const auditWarning =
     match.illegalPokemon.length > 0
       ? 'Audit warning: unexpected Pokemon or levels were detected. Review before payment.'
       : 'Audit passed: no unexpected Pokemon or levels detected.';
 
   return [
-    `${pokeball(config)} AshKetchup match ${match.id} winner: ${winner}. Victory road starts here.`,
-    payoutInstruction,
+    `${pokeball(config)} AshKetchup winner: ${winner}. Victory road starts here.`,
+    formatWagerSettlementLine(match),
     '',
     formatResultTeams(match),
     auditWarning,
-  ].join('\n');
+  ].filter(Boolean).join('\n');
+}
+
+function buildPokenautsResultComponents(
+  match: PokenautsMatch
+): Array<ActionRowBuilder<ButtonBuilder>> {
+  if (match.wager === 0 || match.testMode || match.status !== 'ended' || !match.winnerDiscordId || match.tied) {
+    return [];
+  }
+
+  return [
+    new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`pnm:paid:${match.id}`)
+        .setLabel('Confirm Paid')
+        .setStyle(ButtonStyle.Success)
+        .setDisabled(match.payoutConfirmed || match.wagerCanceled),
+      new ButtonBuilder()
+        .setCustomId(`pnm:wagercancel:${match.id}`)
+        .setLabel('Wager Canceled')
+        .setStyle(ButtonStyle.Danger)
+        .setDisabled(match.payoutConfirmed || match.wagerCanceled),
+      new ButtonBuilder()
+        .setCustomId(`pnm:tradehelp:${match.id}`)
+        .setLabel('Trade Help')
+        .setStyle(ButtonStyle.Secondary)
+        .setDisabled(match.payoutConfirmed || match.wagerCanceled)
+    ),
+  ];
 }
 
 function buildPublicMatchMessage(
@@ -1110,6 +1214,112 @@ function buildPrivateTeamMessage(match: HumanMatch, playerKey: 'a' | 'b'): strin
     player.team.importText,
     '```',
   ].join('\n');
+}
+
+function validateWagerResultAction(
+  interaction: ButtonInteraction,
+  match: PokenautsMatch,
+  config: AppConfig,
+  options: {allowTie?: boolean} = {}
+): string | null {
+  if (match.wager === 0 || match.testMode) {
+    return 'This match has no real wager to settle.';
+  }
+
+  if (match.status !== 'ended') {
+    return 'Wait for AshKetchup to post the battle result before settling the wager.';
+  }
+
+  if (match.tied && !options.allowTie) {
+    return 'This battle tied, so there is no winner to pay.';
+  }
+
+  if (!canManagePokenautsWager(interaction, match, config)) {
+    return 'Only a match participant, banker, or server manager can update the wager.';
+  }
+
+  if (match.payoutConfirmed) {
+    return 'This wager is already marked paid.';
+  }
+
+  if (match.wagerCanceled) {
+    return 'This wager is already canceled.';
+  }
+
+  return null;
+}
+
+function canManagePokenautsWager(
+  interaction: ButtonInteraction,
+  match: PokenautsMatch,
+  config: AppConfig
+): boolean {
+  return Boolean(
+    getParticipantKey(match, interaction.user.id) ||
+      isBanker(interaction.user.id, config) ||
+      interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)
+  );
+}
+
+function buildPokenautsTradeHelpMessage(
+  match: PokenautsMatch,
+  discordUserId: string,
+  config: AppConfig
+): string {
+  const participants = getWagerParticipants(match);
+  if (!participants) return 'No wager trade is available for this match.';
+
+  if (discordUserId === participants.winnerDiscordId) {
+    return [
+      `${pokeball(config)} You won the wager.`,
+      `<@${participants.loserDiscordId}> owes you ${match.wager} Pokecoins.`,
+      '',
+      'Have the loser start a Pokenauts trade with you, add the coins, then both of you confirm after the amount looks right:',
+      '```',
+      '@Pokenauts trade @winner',
+      `@Pokenauts trade add pc ${match.wager}`,
+      '@Pokenauts trade confirm',
+      '```',
+      'After the coins land, click Confirm Paid on the result message.',
+    ].join('\n');
+  }
+
+  return [
+    `${pokeball(config)} You lost the wager.`,
+    `Pay <@${participants.winnerDiscordId}> ${match.wager} Pokecoins with a Pokenauts trade:`,
+    '```',
+    '@Pokenauts trade @winner',
+    `@Pokenauts trade add pc ${match.wager}`,
+    '@Pokenauts trade confirm',
+    '```',
+    'Replace `@winner` with the winner mention. After the trade is complete, click Confirm Paid on the result message.',
+  ].join('\n');
+}
+
+function getWagerParticipants(
+  match: PokenautsMatch
+): {winnerDiscordId: string; loserDiscordId: string} | null {
+  if (match.tied || !match.winnerDiscordId) return null;
+
+  const loserDiscordId = match.winnerDiscordId === match.challengerDiscordId
+    ? match.opponentDiscordId
+    : match.challengerDiscordId;
+
+  return {
+    winnerDiscordId: match.winnerDiscordId,
+    loserDiscordId,
+  };
+}
+
+function formatWagerSettlementLine(match: PokenautsMatch): string {
+  if (match.wager === 0 || match.testMode) return '';
+  if (match.wagerCanceled) return 'Wager canceled. No Pokecoins need to move.';
+  if (match.payoutConfirmed) return `Wager paid: ${match.wager} Pokecoins.`;
+
+  const participants = getWagerParticipants(match);
+  if (!participants) return '';
+
+  return `Wager payment: <@${participants.loserDiscordId}> pays <@${participants.winnerDiscordId}> ${match.wager} Pokecoins. Winner/loser can click Trade Help for private Pokenauts trade steps.`;
 }
 
 function formatTeamSelectionStatus(team: PokenautsMatch['teams'][PokenautsPlayerKey]): string {
@@ -1227,8 +1437,7 @@ function buildShowdownRoomUrl(match: Pick<PokenautsMatch, 'showdownUrl' | 'roomI
 }
 
 function formatMatchFormat(match: Pick<PokenautsMatch, 'format'>): string {
-  if (!hasHiddenTeamPreview(match.format)) return match.format;
-  return `${match.format} (hidden teams)`;
+  return formatTeambuilderFormat(match.format);
 }
 
 function formatTeambuilderFormat(format: string): string {

@@ -288,7 +288,7 @@ Supported commands:
 @Pokenauts buy rare candy
 ```
 
-Pokenauts rejects trades with AshKetchup, so wagered coins are still handled by the configured human banker.
+Pokenauts rejects trades with AshKetchup, so wagered coins are paid player-to-player after AshKetchup posts the result.
 
 Beginner notes:
 
@@ -310,7 +310,7 @@ Use `/ashketchup challenge` for the new inventory-backed flow:
 /ashketchup challenge opponent:@user
 ```
 
-`wager` is optional. Leave it blank for a no-wager match, or set `wager:50` to use the human banker coin-holding/payment text.
+`wager` is optional. Leave it blank for a no-wager match, or set `wager:50` so the loser pays the winner 50 Pokecoins after the result.
 
 AshKetchup posts a public match card in `#pokemon-in-space`.
 
@@ -323,7 +323,7 @@ Each player should:
 
 AshKetchup parses Pokenauts' inventory embed and edited pages, verifies those slots were seen for that Discord user, caps each selected Pokemon at level 50, and generates a private Showdown importable team.
 
-If a wager is set, the trusted banker collects the wager from both players manually, then clicks **Confirm Coins Held**. If no wager is set, coin holding is skipped. After that, each player can click **Reveal Team** to receive their generated Showdown team as an ephemeral reply.
+Each player can click **Reveal Team** after submitting to receive their generated Showdown team as an ephemeral reply. If a wager is set, no coins move before the battle.
 
 After the Showdown battle starts, submit the battle room id:
 
@@ -331,7 +331,7 @@ After the Showdown battle starts, submit the battle room id:
 /ashketchup room match_id:<match-id> room_id:battle-gen9customgame-123
 ```
 
-AshKetchup joins as coordinator, watches for the winner, audits seen species/levels against the submitted teams, then posts payment instructions. If the battle ties or the match is cancelled, the banker can click **Mark Refunded**.
+AshKetchup joins as coordinator, watches for the winner, audits seen species/levels against the submitted teams, then posts payment instructions. If a wager is set, the result message includes **Trade Help**, **Confirm Paid**, and **Wager Canceled** buttons.
 
 ### Solo TestBot Flow
 

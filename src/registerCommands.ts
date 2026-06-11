@@ -18,7 +18,7 @@ const commands = [
         .addIntegerOption(option =>
           option
             .setName('wager')
-            .setDescription('Optional Pokecoin wager from each player.')
+            .setDescription('Optional Pokecoin wager paid by the loser after the result.')
             .setMinValue(0)
         )
     )

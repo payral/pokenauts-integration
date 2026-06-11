@@ -30,6 +30,11 @@ export interface PokenautsBattlePokemonRecord {
   roomId: string;
 }
 
+export interface DiscordMessageRef {
+  channelId: string;
+  messageId: string;
+}
+
 export interface PokenautsMatch {
   id: string;
   challengerDiscordId: string;
@@ -42,6 +47,7 @@ export interface PokenautsMatch {
   teams: Partial<Record<PokenautsPlayerKey, SubmittedPokenautsTeam>>;
   escrowConfirmed: boolean;
   payoutConfirmed: boolean;
+  wagerCanceled: boolean;
   roomId: string | null;
   sideByUsername: Record<string, string>;
   seenPokemon: PokenautsBattlePokemonRecord[];
@@ -54,6 +60,7 @@ export interface PokenautsMatch {
   botChallengeSent: boolean;
   discordChannelId: string | null;
   discordMessageId: string | null;
+  resultDiscordMessages: DiscordMessageRef[];
   createdAt: string;
   updatedAt: string;
 }
@@ -83,13 +90,14 @@ export class PokenautsMatchStore {
       challengerDiscordId,
       opponentDiscordId,
       wager,
-      pot: wager * 2,
+      pot: wager,
       format: this.config.showdownPokenautsFormat,
       showdownUrl: this.config.showdownPublicUrl,
       status: 'collecting_teams',
       teams: {},
-      escrowConfirmed: wager === 0,
+      escrowConfirmed: true,
       payoutConfirmed: false,
+      wagerCanceled: false,
       roomId: null,
       sideByUsername: {},
       seenPokemon: [],
@@ -102,6 +110,7 @@ export class PokenautsMatchStore {
       botChallengeSent: false,
       discordChannelId: null,
       discordMessageId: null,
+      resultDiscordMessages: [],
       createdAt: now,
       updatedAt: now,
     };
@@ -217,6 +226,8 @@ export class PokenautsMatchStore {
   markRefunded(matchId: string): PokenautsMatch {
     const match = this.requireMatch(matchId);
     match.status = 'refunded';
+    match.wagerCanceled = true;
+    match.payoutConfirmed = false;
     match.updatedAt = new Date().toISOString();
     return match;
   }
@@ -224,6 +235,15 @@ export class PokenautsMatchStore {
   confirmPayout(matchId: string): PokenautsMatch {
     const match = this.requireMatch(matchId);
     match.payoutConfirmed = true;
+    match.wagerCanceled = false;
+    match.updatedAt = new Date().toISOString();
+    return match;
+  }
+
+  cancelWager(matchId: string): PokenautsMatch {
+    const match = this.requireMatch(matchId);
+    match.wagerCanceled = true;
+    match.payoutConfirmed = false;
     match.updatedAt = new Date().toISOString();
     return match;
   }
@@ -300,9 +320,10 @@ export class PokenautsMatchStore {
     return match;
   }
 
-  markResultPosted(matchId: string): void {
+  markResultPosted(matchId: string, messages: DiscordMessageRef[] = []): void {
     const match = this.requireMatch(matchId);
     match.resultPosted = true;
+    match.resultDiscordMessages = messages;
     match.updatedAt = new Date().toISOString();
   }
 
@@ -333,8 +354,6 @@ export class PokenautsMatchStore {
     const bothTeamsSubmitted = Boolean(match.teams.challenger && match.teams.opponent);
     if (!bothTeamsSubmitted) {
       match.status = 'collecting_teams';
-    } else if (!match.escrowConfirmed) {
-      match.status = 'awaiting_escrow';
     } else {
       match.status = 'ready';
     }
