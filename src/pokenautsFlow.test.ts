@@ -21,6 +21,20 @@ assert.deepStrictEqual(
   ]
 );
 
+const nicknameParsed = parsePokenautsPokemonList(
+  '`20` **<:_:721476388825071666> Frogadier<:male:1207734081585152101> "frog bitch"** - Lvl. 41 - 64.12%'
+);
+assert.strictEqual(nicknameParsed.length, 1);
+assert.deepStrictEqual(
+  [
+    nicknameParsed[0].slot,
+    nicknameParsed[0].species,
+    nicknameParsed[0].level,
+    nicknameParsed[0].ivPercent,
+  ],
+  [20, 'Frogadier', 41, 64.12]
+);
+
 const now = new Date().toISOString();
 const selected = parsed.slice(0, 3).map(
   (entry): PokenautsInventoryEntry => ({

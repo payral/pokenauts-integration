@@ -18,6 +18,7 @@ import {AppConfig} from './config';
 import {PokenautsInventoryEntry, PokenautsInventoryTracker} from './pokenautsInventory';
 import {
   DiscordMessageRef,
+  PlayerBattleRecord,
   PokenautsMatch,
   PokenautsMatchStore,
   PokenautsPlayerKey,
@@ -29,6 +30,7 @@ import {
 } from './showdownTeamBuilder';
 import {HumanMatch, showdownHarness} from './showdownHarness';
 import {installPokenautsMessageProbe} from './pokenautsMessageProbe';
+import {BattleRecordStore} from './battleRecordStore';
 
 export async function startDiscordBot(
   config: AppConfig
@@ -46,10 +48,11 @@ export async function startDiscordBot(
   });
   const inventoryTracker = new PokenautsInventoryTracker(config);
   const pokenautsMatches = new PokenautsMatchStore(config);
+  const battleRecords = new BattleRecordStore();
 
   inventoryTracker.install(client);
   installPokenautsMessageProbe(client, config);
-  wirePokenautsShowdownEvents(client, config, pokenautsMatches);
+  wirePokenautsShowdownEvents(client, config, pokenautsMatches, battleRecords);
 
   client.once('ready', readyClient => {
     console.log(`[discord] Logged in as ${readyClient.user.tag}`);
@@ -132,8 +135,8 @@ async function handleHelpCommand(
   interaction: ChatInputCommandInteraction,
   config: AppConfig
 ): Promise<void> {
-  await interaction.reply({
-    content: [
+  const helpSections = [
+    [
       `${pokeball(config)} AshKetchup help: your Pokenauts-to-Showdown battle buddy is ready.`,
       '',
       'AshKetchup commands:',
@@ -141,29 +144,44 @@ async function handleHelpCommand(
       '`/ashketchup testbot wager:1` - test solo against PokenautsTestBotA.',
       '`/ashketchup room match_id:<id> room_id:battle-gen9customgame-123` - tell AshKetchup where to watch.',
       '',
+      'Links:',
+      'Source code: <https://github.com/payral/pokenauts-integration>',
+      'Showdown fork: <https://github.com/payral/selfhosted-ps>',
+    ],
+    [
       'Pokenauts basics:',
-      '`@Pokenauts balance` or `@Pokenauts bal` - check your Pokecoin balance.',
-      '`@Pokenauts pokemon` - show your Pokemon inventory.',
-      '`@Pokenauts info <slot>` - inspect one Pokemon, like `@Pokenauts info 1`.',
-      '`@Pokenauts trade @user` - start a trade with another human player.',
-      '`@Pokenauts trade add <slot>` - add a Pokemon to an open trade.',
-      '`@Pokenauts trade add pc <amount>` - add Pokecoins to an open trade.',
-      '`@Pokenauts trade confirm` - confirm when both players are ready.',
-      '`@Pokenauts select <slot>` - choose the one Pokemon that gains XP from normal chat.',
-      '`@Pokenauts favorite <slot>` - protect a Pokemon from accidental release/trade; this does not select it for XP.',
-      '`@Pokenauts buy rare candy` - spend Pokecoins to level the selected Pokemon faster.',
-      '',
-      'Pokecoin basics: earn coins by catching Pokemon, catch milestones, quests, releasing Pokemon, and player market/trade activity.',
-      'Leveling basics: your selected Pokemon gains XP from normal chat messages. Usually only one Pokemon is selected for XP at a time.',
-      '',
-      'Battle flow: run `@Pokenauts pokemon`, page until your 3 chosen slots show up, then click Submit Team on the match card.',
+      '`@Pokenauts bal` - coins.',
+      '`@Pokenauts pokemon` - inventory.',
+      '`@Pokenauts trade @user` - start trade.',
+      '`@Pokenauts trade add <slot>` - add Pokemon.',
+      '`@Pokenauts trade add pc <amount>` - add coins.',
+      '`@Pokenauts select <slot>` - earns chat XP.',
+      '`@Pokenauts favorite <slot>` - protect Pokemon.',
+      '`@Pokenauts buy rare candy` - level selected Pokemon.',
+    ],
+    [
+      'Battle notes:',
+      'Pokecoins come from catching Pokemon, catch milestones, quests, releasing Pokemon, and player market/trade activity.',
+      'Your selected Pokemon gains XP from normal chat messages. Usually only one Pokemon is selected for XP at a time.',
+      'Run `@Pokenauts pokemon`, page until your 3 chosen slots show up, then click Submit Team on the match card.',
       'AshKetchup battles cap every Pokemon at level 50, even if your Pokenauts Pokemon is higher level.',
       'Movesets are preset by AshKetchup from local Showdown data, so you only pick the 3 Pokemon, not their moves.',
       'Teams are hidden before battle starts and only reveal as Pokemon enter battle.',
       'Wagers are player-to-player: after AshKetchup posts the winner, the loser pays the winner with a Pokenauts trade.',
-    ].join('\n'),
+    ],
+  ].map(section => section.join('\n'));
+
+  await interaction.reply({
+    content: helpSections[0],
     ephemeral: true,
   });
+
+  for (const section of helpSections.slice(1)) {
+    await interaction.followUp({
+      content: section,
+      ephemeral: true,
+    });
+  }
 }
 
 async function handlePokenautsChallengeCommand(
@@ -339,14 +357,12 @@ async function handlePokenautsTeamModal(
     entries
   );
   await updatePokenautsMatchMessage(interaction.client, config, updatedMatch);
+  const playerKey = pokenautsMatches.getPlayerKey(updatedMatch, interaction.user.id);
 
   await interaction.reply({
-    content:
-      `${pokeball(config)} Team locked in for match ${match.id}: ` +
-      entries
-        .map(entry => `${entry.slot}: ${entry.species} L${Math.min(entry.level, 50)}`)
-        .join(', ') +
-      '. Time to battle.',
+    content: playerKey
+      ? buildPrivatePokenautsTeamMessage(updatedMatch, playerKey)
+      : `${pokeball(config)} Team locked in. Time to battle.`,
     ephemeral: true,
   });
 
@@ -674,7 +690,8 @@ async function resolveMatchChannel(
 function wirePokenautsShowdownEvents(
   client: Client,
   config: AppConfig,
-  pokenautsMatches: PokenautsMatchStore
+  pokenautsMatches: PokenautsMatchStore,
+  battleRecords: BattleRecordStore
 ): void {
   for (const showdownClient of [showdownHarness.coordinator, showdownHarness.testBotA]) {
     showdownClient.on('message', message => {
@@ -692,7 +709,7 @@ function wirePokenautsShowdownEvents(
       updatePokenautsMatchMessage(client, config, match).catch(error => {
         console.warn(`[discord] Could not update match ${match.id}: ${formatError(error)}`);
       });
-      announcePokenautsResult(client, config, pokenautsMatches, match).catch(error => {
+      announcePokenautsResult(client, config, pokenautsMatches, battleRecords, match).catch(error => {
         console.warn(`[discord] Could not announce match ${match.id}: ${formatError(error)}`);
       });
     });
@@ -836,18 +853,22 @@ async function announcePokenautsResult(
   client: Client,
   config: AppConfig,
   pokenautsMatches: PokenautsMatchStore,
+  battleRecords: BattleRecordStore,
   match: PokenautsMatch
 ): Promise<void> {
   if (match.resultPosted || !match.discordChannelId) return;
 
-  const channels = await resolveResultChannels(client, config, match);
+  const resultRecords = await battleRecords.recordMatchResult(match);
+  const matchWithRecords = pokenautsMatches.setResultRecords(match.id, resultRecords);
+
+  const channels = await resolveResultChannels(client, config, matchWithRecords);
   if (channels.length === 0) {
     console.warn(`[discord] Could not resolve any result channels for match ${match.id}`);
     return;
   }
 
-  const resultMessage = buildPokenautsResultMessage(match, config);
-  const resultComponents = buildPokenautsResultComponents(match);
+  const resultMessage = buildPokenautsResultMessage(matchWithRecords, config);
+  const resultComponents = buildPokenautsResultComponents(matchWithRecords);
   const sentMessages: DiscordMessageRef[] = [];
   for (const channel of channels) {
     try {
@@ -865,7 +886,7 @@ async function announcePokenautsResult(
       );
     }
   }
-  pokenautsMatches.markResultPosted(match.id, sentMessages);
+  pokenautsMatches.markResultPosted(matchWithRecords.id, sentMessages);
 }
 
 async function resolveResultChannels(
@@ -955,31 +976,30 @@ function buildPokenautsPublicMatchMessage(
   const steps =
     match.testMode
       ? [
-          '1. Join Showdown, create a username, and keep this link handy:',
+          '1. Go to Showdown and create a username:',
           match.showdownUrl,
           '2. Run `@Pokenauts pokemon` in this channel and page until your 3 chosen slots are visible.',
-          '3. Click Submit Team, then Reveal Team to get your private import text.',
+          '3. Click Submit Team to get your private Teambuilder import text.',
           `4. ${config?.showdownTestBotAUsername || 'PokenautsTestBotA'} auto-challenges after your team is submitted. Import your team, accept the challenge, then forfeit when you want the test result.`,
         ]
       : match.wager > 0
       ? [
-          '1. Join Showdown, create a username, and keep this link handy:',
+          '1. Go to Showdown and create a username:',
           match.showdownUrl,
           '2. Run `@Pokenauts pokemon` in this channel and page until your 3 chosen slots are visible.',
           '3. Click Submit Team, enter your Showdown username, then your 3 inventory slot numbers.',
           `4. Wager agreed: loser pays winner ${match.wager} Pokecoins after AshKetchup posts the result.`,
-          '5. Click Reveal Team, import privately, then use the private `/challenge` command exactly as shown.',
+          '5. Import with Teambuilder, then use the private `/challenge` command exactly as shown.',
           'After the battle starts, copy the battle room id from the Showdown URL and run:',
           '```',
           roomCommand,
           '```',
-          'After the result, use the Confirm Paid or Wager Canceled buttons on the result post.',
         ]
       : [
-          '1. Join Showdown, create a username, and keep this link handy:',
+          '1. Go to Showdown and create a username:',
           match.showdownUrl,
           '2. Run `@Pokenauts pokemon` in this channel and page until your 3 chosen slots are visible.',
-          '3. Click Submit Team, then Reveal Team to get your private import text and battle instructions.',
+          '3. Click Submit Team to get your private Teambuilder import text and battle instructions.',
           '4. Use the private `/challenge` command as shown. After the battle starts, copy the battle room id from the Showdown URL and run:',
           '```',
           roomCommand,
@@ -1021,11 +1041,6 @@ function buildPokenautsMatchComponents(
         .setCustomId(`pnm:submit:${match.id}`)
         .setLabel('Submit Team')
         .setStyle(ButtonStyle.Primary)
-        .setDisabled(match.status === 'ended' || match.status === 'refunded'),
-      new ButtonBuilder()
-        .setCustomId(`pnm:reveal:${match.id}`)
-        .setLabel('Reveal Team')
-        .setStyle(ButtonStyle.Secondary)
         .setDisabled(match.status === 'ended' || match.status === 'refunded')
     ),
   ];
@@ -1045,9 +1060,9 @@ function buildPrivatePokenautsTeamMessage(
   const opponentTeam = match.teams[opponentKey];
   if (!team) return 'Submit your team first.';
 
-  const challengeCommand = opponentTeam
-    ? `/challenge ${opponentTeam.showdownUsername}, ${match.format}`
-    : null;
+  const challengeCommand = `/challenge ${
+    opponentTeam?.showdownUsername || '<opponent-showdown-username>'
+  }, ${match.format}`;
   const roomCommand = `/ashketchup room match_id:${match.id} room_id:<battle-room-id>`;
 
   return [
@@ -1061,7 +1076,7 @@ function buildPrivatePokenautsTeamMessage(
       ? ['Challenge with this exact command:', '```', challengeCommand, '```'].join('\n')
       : opponentTeam
       ? `Accept the challenge from ${opponentTeam.showdownUsername} in ${match.format}.`
-      : 'Your team is ready. The exact battle command appears here after the other player submits.',
+      : ['Challenge with this command once you know their Showdown username:', '```', challengeCommand, '```'].join('\n'),
     match.testMode
       ? 'For the solo test, AshKetchup should auto-detect the battle room after you accept.'
       : [
@@ -1091,7 +1106,9 @@ function buildPrivatePokenautsTeamMessage(
 function buildPokenautsResultMessage(match: PokenautsMatch, config: AppConfig): string {
   if (match.testMode) {
     const winner =
-      match.winnerDiscordId ? `<@${match.winnerDiscordId}>` : match.winnerShowdownUsername || 'unknown';
+      match.winnerDiscordId
+        ? formatDiscordUserWithRecord(match, match.winnerDiscordId)
+        : match.winnerShowdownUsername || 'unknown';
     const payoutPreview = match.wager === 0
       ? ''
       : match.tied
@@ -1122,7 +1139,9 @@ function buildPokenautsResultMessage(match: PokenautsMatch, config: AppConfig): 
   }
 
   const winner =
-    match.winnerDiscordId ? `<@${match.winnerDiscordId}>` : match.winnerShowdownUsername || 'unknown';
+    match.winnerDiscordId
+      ? formatDiscordUserWithRecord(match, match.winnerDiscordId)
+      : match.winnerShowdownUsername || 'unknown';
   const auditWarning =
     match.illegalPokemon.length > 0
       ? 'Audit warning: unexpected Pokemon or levels were detected. Review before payment.'
@@ -1358,7 +1377,18 @@ function formatResultTeam(match: PokenautsMatch, playerKey: PokenautsPlayerKey):
     .map(entry => `${entry.species} L${entry.showdownLevel}`)
     .join(', ');
 
-  return `<@${discordId}> (${team.showdownUsername}) - ${pokemon}`;
+  return `${formatDiscordUserWithRecord(match, discordId)} (${team.showdownUsername}) - ${pokemon}`;
+}
+
+function formatDiscordUserWithRecord(match: PokenautsMatch, discordUserId: string): string {
+  const playerKey = getParticipantKey(match, discordUserId);
+  const record = playerKey ? match.resultRecords[playerKey] : undefined;
+  return `<@${discordUserId}>${formatRecordSuffix(record)}`;
+}
+
+function formatRecordSuffix(record: PlayerBattleRecord | undefined): string {
+  if (!record) return '';
+  return ` [${record.wins}W-${record.losses}L-${record.draws}D]`;
 }
 
 function formatMatchStatus(status: PokenautsMatch['status']): string {

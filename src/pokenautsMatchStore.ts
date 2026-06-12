@@ -35,6 +35,12 @@ export interface DiscordMessageRef {
   messageId: string;
 }
 
+export interface PlayerBattleRecord {
+  wins: number;
+  losses: number;
+  draws: number;
+}
+
 export interface PokenautsMatch {
   id: string;
   challengerDiscordId: string;
@@ -61,6 +67,7 @@ export interface PokenautsMatch {
   discordChannelId: string | null;
   discordMessageId: string | null;
   resultDiscordMessages: DiscordMessageRef[];
+  resultRecords: Partial<Record<PokenautsPlayerKey, PlayerBattleRecord>>;
   createdAt: string;
   updatedAt: string;
 }
@@ -111,6 +118,7 @@ export class PokenautsMatchStore {
       discordChannelId: null,
       discordMessageId: null,
       resultDiscordMessages: [],
+      resultRecords: {},
       createdAt: now,
       updatedAt: now,
     };
@@ -325,6 +333,16 @@ export class PokenautsMatchStore {
     match.resultPosted = true;
     match.resultDiscordMessages = messages;
     match.updatedAt = new Date().toISOString();
+  }
+
+  setResultRecords(
+    matchId: string,
+    records: Partial<Record<PokenautsPlayerKey, PlayerBattleRecord>>
+  ): PokenautsMatch {
+    const match = this.requireMatch(matchId);
+    match.resultRecords = records;
+    match.updatedAt = new Date().toISOString();
+    return match;
   }
 
   getPlayerKey(match: PokenautsMatch, discordUserId: string): PokenautsPlayerKey | undefined {

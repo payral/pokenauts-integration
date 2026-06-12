@@ -72,6 +72,22 @@ function readList(value: string | undefined): string[] {
     .filter(Boolean);
 }
 
+function readSingleDiscordId(
+  value: string | undefined,
+  envName: string
+): string | undefined {
+  const items = readList(value);
+  if (items.length === 0) return undefined;
+
+  if (items.length > 1) {
+    console.warn(
+      `[config] ${envName} should be one channel ID. Using ${items[0]}; put extra channels in DISCORD_RESULT_CHANNEL_IDS.`
+    );
+  }
+
+  return items[0];
+}
+
 function normalizeDiscordEmoji(value: string | undefined): string {
   const trimmed = value?.trim();
   if (!trimmed) return DEFAULT_DISCORD_POKEBALL_EMOJI;
@@ -119,7 +135,10 @@ export const config: AppConfig = {
   discordClientId: optionalEnv(process.env.DISCORD_CLIENT_ID),
   discordGuildId: optionalEnv(process.env.DISCORD_GUILD_ID),
   discordBankerUserId: optionalEnv(process.env.DISCORD_BANKER_USER_ID),
-  discordMatchChannelId: optionalEnv(process.env.DISCORD_MATCH_CHANNEL_ID),
+  discordMatchChannelId: readSingleDiscordId(
+    process.env.DISCORD_MATCH_CHANNEL_ID,
+    'DISCORD_MATCH_CHANNEL_ID'
+  ),
   discordMatchChannelName:
     process.env.DISCORD_MATCH_CHANNEL_NAME || DEFAULT_DISCORD_MATCH_CHANNEL_NAME,
   discordResultChannelIds: readList(process.env.DISCORD_RESULT_CHANNEL_IDS),

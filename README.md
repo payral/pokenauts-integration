@@ -221,7 +221,7 @@ SHOWDOWN_ROOT=../selfhosted-ps
 
 `DISCORD_POKEBALL_EMOJI` should be `<:pokeball:1510466501482905690>`. Avoid `:pokeball:` because Discord only expands that shorthand for humans typing in the client, not for bot API messages.
 
-`DISCORD_MATCH_CHANNEL_ID` is optional but recommended. If set, the bot posts there directly instead of searching by channel name.
+`DISCORD_MATCH_CHANNEL_ID` is optional but recommended. It must be one channel ID only; this is where match cards are posted.
 
 `DISCORD_RESULT_CHANNEL_IDS` is optional and controls where final battle results are posted. To report victories in both `#pokemon-in-space` and `#commons`, copy both Discord channel IDs and set them comma-separated:
 
@@ -300,7 +300,8 @@ Beginner notes:
 - AshKetchup generates preset movesets from local Showdown data, so players only pick the 3 Pokemon, not their moves.
 - AshKetchup removes Showdown Team Preview for Pokenauts matches, so the selected 3 stay hidden until Pokemon enter battle.
 - The public match card only shows whether each player has selected a team; it does not reveal slots, species, or Showdown usernames.
-- Players should use the exact private `/challenge ..., gen9customgame@@@!teampreview` instruction from **Reveal Team** instead of plain Custom Game from the dropdown.
+- Players should use the exact private `/challenge ..., gen9customgame@@@!teampreview` instruction from **Submit Team** instead of plain Custom Game from the dropdown.
+- Real `/ashketchup challenge` results update local Discord W-L-D records in `data/discord-battle-records.json`. Solo TestBot matches do not count, and `data/` is gitignored.
 
 ### Pokenauts Inventory 3v3 Flow
 
@@ -323,7 +324,7 @@ Each player should:
 
 AshKetchup parses Pokenauts' inventory embed and edited pages, verifies those slots were seen for that Discord user, caps each selected Pokemon at level 50, and generates a private Showdown importable team.
 
-Each player can click **Reveal Team** after submitting to receive their generated Showdown team as an ephemeral reply. If a wager is set, no coins move before the battle.
+Each player receives their generated Showdown team as an ephemeral reply after submitting. If a wager is set, no coins move before the battle.
 
 After the Showdown battle starts, submit the battle room id:
 
@@ -349,7 +350,7 @@ Then:
 2. Page until the 3 wanted slots have appeared.
 3. Click **Submit Team** and enter your Showdown username plus 3 slots.
 4. AshKetchup sends a challenge from `PokenautsTestBotA` to your Showdown username.
-5. Click **Reveal Team**, import your generated team, accept the challenge, then forfeit to make the bot win.
+5. Import your generated team, accept the challenge, then forfeit to make the bot win.
 
 AshKetchup should auto-detect the battle room from `PokenautsTestBotA`, watch the result, and post solo-test wager payment text. No real Pokecoins move in this flow.
 

@@ -250,6 +250,7 @@ function collectEmbedText(embeds: readonly Embed[]): string {
 function normalizeSpecies(value: string): string {
   return value
     .replace(/<a?:[^:>]+:\d+>/gu, '')
+    .replace(/\s*["“][^"”]*["”]/gu, '')
     .replace(/\*\*/gu, '')
     .replace(/`/gu, '')
     .replace(/Nidoran\s*♀/giu, 'Nidoran-F')
