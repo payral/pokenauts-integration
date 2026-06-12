@@ -1,6 +1,6 @@
 import express from 'express';
 import {config} from './config';
-import {startDiscordBot} from './discordBot';
+import {handlePokenautsShowdownResultCallback, startDiscordBot} from './discordBot';
 import {createBattlesRouter} from './routes/battles';
 import {createShowdownTestRouter} from './routes/showdownTest';
 import {showdownHarness} from './showdownHarness';
@@ -10,6 +10,20 @@ const app = express();
 app.use(express.json());
 app.use('/battles', createBattlesRouter());
 app.use('/showdown', createShowdownTestRouter(showdownHarness));
+
+app.post('/showdown/pokenauts/results', async (request, response) => {
+  try {
+    const result = await handlePokenautsShowdownResultCallback(
+      request.body,
+      request.header('authorization')
+    );
+    response.status(result.statusCode).json(result.body);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn(`[service] Pokenauts result callback failed: ${message}`);
+    response.status(500).json({ok: false, error: message});
+  }
+});
 
 app.get('/health', (_request, response) => {
   response.json({
@@ -31,6 +45,7 @@ const server = app.listen(config.port, () => {
   console.log('[service] pokenauts-integration started');
   console.log(`[service] HTTP listening on http://localhost:${config.port}`);
   console.log(`[service] Showdown websocket URL: ${config.showdownWsUrl}`);
+  console.log(`[service] Showdown private-link API: ${config.showdownInternalApiUrl}`);
   console.log(`[service] Coordinator username: ${config.showdownCoordinatorUsername}`);
   console.log(`[service] TestBotA username: ${config.showdownTestBotAUsername}`);
 });

@@ -24,8 +24,8 @@ const commands = [
     )
     .addSubcommand(subcommand =>
       subcommand
-        .setName('testbot')
-        .setDescription('Solo-test your Pokenauts inventory flow against PokenautsTestBotA.')
+        .setName('test')
+        .setDescription('Solo-test the private Showdown link flow.')
         .addIntegerOption(option =>
           option
             .setName('wager')

@@ -5,6 +5,7 @@ dotenv.config();
 const DEFAULT_PORT = 3001;
 const DEFAULT_SHOWDOWN_WS_URL = 'ws://localhost:8000/showdown/websocket';
 const DEFAULT_SHOWDOWN_PUBLIC_URL = 'http://localhost:8000';
+const DEFAULT_SHOWDOWN_INTERNAL_API_URL = 'http://localhost:8000';
 const DEFAULT_SHOWDOWN_LOGIN_URL = 'https://play.pokemonshowdown.com/action.php';
 const DEFAULT_COORDINATOR_USERNAME = 'PokenautsBot';
 const DEFAULT_TESTBOT_A_USERNAME = 'PokenautsTestBotA';
@@ -18,6 +19,9 @@ export interface AppConfig {
   port: number;
   showdownWsUrl: string;
   showdownPublicUrl: string;
+  showdownInternalApiUrl: string;
+  showdownResultCallbackUrl: string;
+  pokenautsShowdownApiSecret?: string;
   showdownLoginUrl: string;
   showdownCoordinatorUsername: string;
   showdownCoordinatorPassword?: string;
@@ -118,6 +122,12 @@ export const config: AppConfig = {
   port: readPort(process.env.PORT),
   showdownWsUrl: process.env.SHOWDOWN_WS_URL || DEFAULT_SHOWDOWN_WS_URL,
   showdownPublicUrl: process.env.SHOWDOWN_PUBLIC_URL || DEFAULT_SHOWDOWN_PUBLIC_URL,
+  showdownInternalApiUrl:
+    process.env.SHOWDOWN_INTERNAL_API_URL || DEFAULT_SHOWDOWN_INTERNAL_API_URL,
+  showdownResultCallbackUrl:
+    process.env.SHOWDOWN_RESULT_CALLBACK_URL ||
+    `http://localhost:${readPort(process.env.PORT)}/showdown/pokenauts/results`,
+  pokenautsShowdownApiSecret: optionalEnv(process.env.POKENAUTS_SHOWDOWN_API_SECRET),
   showdownLoginUrl: process.env.SHOWDOWN_LOGIN_URL || DEFAULT_SHOWDOWN_LOGIN_URL,
   showdownCoordinatorUsername:
     process.env.SHOWDOWN_COORDINATOR_USERNAME || DEFAULT_COORDINATOR_USERNAME,

@@ -55,6 +55,8 @@ export interface PokenautsMatch {
   payoutConfirmed: boolean;
   wagerCanceled: boolean;
   roomId: string | null;
+  privateLinksCreated: boolean;
+  privateJoinLinks: Partial<Record<PokenautsPlayerKey, string>>;
   sideByUsername: Record<string, string>;
   seenPokemon: PokenautsBattlePokemonRecord[];
   illegalPokemon: PokenautsBattlePokemonRecord[];
@@ -63,6 +65,7 @@ export interface PokenautsMatch {
   tied: boolean;
   resultPosted: boolean;
   testMode: boolean;
+  privateLinkTest: boolean;
   botChallengeSent: boolean;
   discordChannelId: string | null;
   discordMessageId: string | null;
@@ -81,7 +84,7 @@ export class PokenautsMatchStore {
     challengerDiscordId: string,
     opponentDiscordId: string,
     wager: number,
-    options: {testMode?: boolean} = {}
+    options: {testMode?: boolean; privateLinkTest?: boolean} = {}
   ): PokenautsMatch {
     if (challengerDiscordId === opponentDiscordId) {
       throw new Error('You cannot challenge yourself');
@@ -106,6 +109,8 @@ export class PokenautsMatchStore {
       payoutConfirmed: false,
       wagerCanceled: false,
       roomId: null,
+      privateLinksCreated: false,
+      privateJoinLinks: {},
       sideByUsername: {},
       seenPokemon: [],
       illegalPokemon: [],
@@ -114,6 +119,7 @@ export class PokenautsMatchStore {
       tied: false,
       resultPosted: false,
       testMode: options.testMode === true,
+      privateLinkTest: options.privateLinkTest === true,
       botChallengeSent: false,
       discordChannelId: null,
       discordMessageId: null,
@@ -124,6 +130,20 @@ export class PokenautsMatchStore {
     };
 
     this.matches.set(match.id, match);
+    return match;
+  }
+
+  createPrivateLinkTestMatch(
+    humanDiscordId: string,
+    botDiscordId: string,
+    wager: number
+  ): PokenautsMatch {
+    const match = this.createMatch(humanDiscordId, botDiscordId, wager, {
+      testMode: true,
+      privateLinkTest: true,
+    });
+    match.escrowConfirmed = true;
+    this.refreshStatus(match);
     return match;
   }
 
@@ -164,7 +184,7 @@ export class PokenautsMatchStore {
     const playerKey = this.requireParticipant(match, discordUserId);
     const trimmedUsername = showdownUsername.trim();
 
-    if (!trimmedUsername) {
+    if (match.testMode && !match.privateLinkTest && !trimmedUsername) {
       throw new Error('Showdown username is required');
     }
 
@@ -176,11 +196,71 @@ export class PokenautsMatchStore {
     const team = generatePokenautsTeam(this.config, entries);
     match.teams[playerKey] = {
       ...team,
-      showdownUsername: trimmedUsername,
+      showdownUsername: trimmedUsername || discordUserId,
       submittedAt: new Date().toISOString(),
     };
 
     this.refreshStatus(match);
+    return match;
+  }
+
+  markPrivateLinksCreated(
+    matchId: string,
+    roomId: string,
+    joinLinks: Partial<Record<PokenautsPlayerKey, string>>,
+    players: Partial<Record<PokenautsPlayerKey, {showdownName: string; slot: string}>>
+  ): PokenautsMatch {
+    const match = this.requireMatch(matchId);
+    match.roomId = roomId;
+    match.privateLinksCreated = true;
+    match.privateJoinLinks = joinLinks;
+    match.status = 'watching';
+
+    for (const playerKey of ['challenger', 'opponent'] as const) {
+      const player = players[playerKey];
+      const team = match.teams[playerKey];
+      if (!player || !team) continue;
+
+      team.showdownUsername = player.showdownName;
+      match.sideByUsername[toId(player.showdownName)] = player.slot;
+    }
+
+    match.updatedAt = new Date().toISOString();
+    return match;
+  }
+
+  recordPrivateBattleResult(result: {
+    matchId: string;
+    roomId: string;
+    winner?: string | null;
+    winnerDiscordId?: string | null;
+    tied?: boolean;
+    players?: Array<{
+      key: PokenautsPlayerKey;
+      discordId: string;
+      showdownName: string;
+      slot: string;
+    }>;
+  }): PokenautsMatch | undefined {
+    const match = this.matches.get(result.matchId);
+    if (!match) return undefined;
+
+    match.roomId = result.roomId;
+    match.status = 'ended';
+    match.tied = result.tied === true;
+    match.winnerShowdownUsername = result.winner || null;
+    match.winnerDiscordId =
+      result.tied || !result.winner
+        ? null
+        : result.winnerDiscordId || this.findDiscordIdForWinner(match, result.winner);
+
+    for (const player of result.players || []) {
+      const team = match.teams[player.key];
+      if (team) team.showdownUsername = player.showdownName;
+      match.sideByUsername[toId(player.showdownName)] = player.slot;
+    }
+
+    match.updatedAt = new Date().toISOString();
     return match;
   }
 

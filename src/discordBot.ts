@@ -31,6 +31,16 @@ import {
 import {HumanMatch, showdownHarness} from './showdownHarness';
 import {installPokenautsMessageProbe} from './pokenautsMessageProbe';
 import {BattleRecordStore} from './battleRecordStore';
+import {createShowdownPrivateLinkMatch} from './showdownPokenautsApi';
+
+interface ActivePokenautsContext {
+  client: Client;
+  config: AppConfig;
+  pokenautsMatches: PokenautsMatchStore;
+  battleRecords: BattleRecordStore;
+}
+
+let activePokenautsContext: ActivePokenautsContext | undefined;
 
 export async function startDiscordBot(
   config: AppConfig
@@ -49,6 +59,7 @@ export async function startDiscordBot(
   const inventoryTracker = new PokenautsInventoryTracker(config);
   const pokenautsMatches = new PokenautsMatchStore(config);
   const battleRecords = new BattleRecordStore();
+  activePokenautsContext = {client, config, pokenautsMatches, battleRecords};
 
   inventoryTracker.install(client);
   installPokenautsMessageProbe(client, config);
@@ -105,6 +116,11 @@ export async function startDiscordBot(
           return;
         }
 
+        if (subcommand === 'test') {
+          await handlePokenautsTestCommand(interaction, config, pokenautsMatches);
+          return;
+        }
+
         if (subcommand === 'testbot') {
           await handlePokenautsTestBotCommand(interaction, config, pokenautsMatches);
           return;
@@ -141,7 +157,7 @@ async function handleHelpCommand(
       '',
       'AshKetchup commands:',
       '`/ashketchup challenge opponent:@user wager:50` - start a 3v3 match card.',
-      '`/ashketchup testbot wager:1` - test solo against PokenautsTestBotA.',
+      '`/ashketchup test wager:1` - test the private-link battle flow by yourself.',
       '`/ashketchup room match_id:<id> room_id:battle-gen9customgame-123` - tell AshKetchup where to watch.',
       '',
       'Links:',
@@ -182,6 +198,45 @@ async function handleHelpCommand(
       ephemeral: true,
     });
   }
+}
+
+async function handlePokenautsTestCommand(
+  interaction: ChatInputCommandInteraction,
+  config: AppConfig,
+  pokenautsMatches: PokenautsMatchStore
+): Promise<void> {
+  const wager = interaction.options.getInteger('wager') ?? 0;
+  const botUser = interaction.client.user;
+  if (!botUser) {
+    await interaction.reply({content: 'AshKetchup is not ready yet.', ephemeral: true});
+    return;
+  }
+
+  const match = pokenautsMatches.createPrivateLinkTestMatch(
+    interaction.user.id,
+    botUser.id,
+    wager
+  );
+  pokenautsMatches.submitFixedTeam(
+    match.id,
+    'opponent',
+    botUser.username,
+    buildSoloTestBotTeam(config)
+  );
+
+  const channel = await resolveMatchChannel(interaction, config);
+  const sentMessage = await channel.send({
+    content: buildPokenautsPublicMatchMessage(match, config),
+    components: buildPokenautsMatchComponents(match),
+  });
+  pokenautsMatches.setDiscordMessage(match.id, sentMessage.channelId, sentMessage.id);
+
+  await interaction.reply({
+    content:
+      `${pokeball(config)} Solo test queued! Posted match ${match.id} in ${formatChannelName(channel)}. ` +
+      'Run `@Pokenauts pokemon`, click Submit Team, and AshKetchup will give you both private Showdown links.',
+    ephemeral: true,
+  });
 }
 
 async function handlePokenautsChallengeCommand(
@@ -313,9 +368,9 @@ async function handlePokenautsTeamModal(
     return;
   }
 
-  const showdownUsername = interaction.fields
-    .getTextInputValue('showdown_username')
-    .trim();
+  const showdownUsername = match.testMode && !match.privateLinkTest
+    ? interaction.fields.getTextInputValue('showdown_username').trim()
+    : interaction.user.username;
   const slots = ['slot_1', 'slot_2', 'slot_3'].map(inputId =>
     Number.parseInt(interaction.fields.getTextInputValue(inputId).trim(), 10)
   );
@@ -366,6 +421,17 @@ async function handlePokenautsTeamModal(
     ephemeral: true,
   });
 
+  const privateLinkMessage = await maybeCreatePrivateShowdownLinks(
+    interaction.client,
+    config,
+    pokenautsMatches,
+    updatedMatch,
+    playerKey
+  );
+  if (privateLinkMessage) {
+    await interaction.followUp({content: privateLinkMessage, ephemeral: true});
+  }
+
   const soloStartMessage = await maybeStartSoloBotChallenge(
     interaction.client,
     config,
@@ -397,6 +463,11 @@ async function handlePokenautsMatchButton(
 
   if (action === 'reveal') {
     await revealPokenautsTeam(interaction, match, pokenautsMatches);
+    return;
+  }
+
+  if (action === 'join') {
+    await showPrivateJoinLink(interaction, match, pokenautsMatches);
     return;
   }
 
@@ -439,13 +510,17 @@ async function showTeamSubmissionModal(
     .setTitle('Submit Pokenauts Team');
 
   modal.addComponents(
-    new ActionRowBuilder<TextInputBuilder>().addComponents(
-      new TextInputBuilder()
-        .setCustomId('showdown_username')
-        .setLabel('Your Showdown username')
-        .setStyle(TextInputStyle.Short)
-        .setRequired(true)
-    ),
+    ...(match.testMode && !match.privateLinkTest
+      ? [
+          new ActionRowBuilder<TextInputBuilder>().addComponents(
+            new TextInputBuilder()
+              .setCustomId('showdown_username')
+              .setLabel('Your Showdown username')
+              .setStyle(TextInputStyle.Short)
+              .setRequired(true)
+          ),
+        ]
+      : []),
     new ActionRowBuilder<TextInputBuilder>().addComponents(
       new TextInputBuilder()
         .setCustomId('slot_1')
@@ -473,6 +548,35 @@ async function showTeamSubmissionModal(
   );
 
   await interaction.showModal(modal);
+}
+
+async function showPrivateJoinLink(
+  interaction: ButtonInteraction,
+  match: PokenautsMatch,
+  pokenautsMatches: PokenautsMatchStore
+): Promise<void> {
+  const playerKey = pokenautsMatches.getPlayerKey(match, interaction.user.id);
+  if (!playerKey) {
+    await interaction.reply({
+      content: 'Only match participants can get a private join link.',
+      ephemeral: true,
+    });
+    return;
+  }
+
+  const joinLink = match.privateJoinLinks[playerKey];
+  if (!joinLink) {
+    await interaction.reply({
+      content: 'Your private Showdown link is not ready yet. Both teams need to be submitted first.',
+      ephemeral: true,
+    });
+    return;
+  }
+
+  await interaction.reply({
+    content: buildPrivatePokenautsJoinMessage(match, playerKey),
+    ephemeral: true,
+  });
 }
 
 async function revealPokenautsTeam(
@@ -735,7 +839,7 @@ async function maybeStartSoloBotChallenge(
   pokenautsMatches: PokenautsMatchStore,
   match: PokenautsMatch
 ): Promise<string | undefined> {
-  if (!match.testMode || match.botChallengeSent) return undefined;
+  if (!match.testMode || match.privateLinkTest || match.botChallengeSent) return undefined;
   const humanTeam = match.teams.challenger;
   const botTeam = match.teams.opponent;
   if (!humanTeam || !botTeam || !match.escrowConfirmed) return undefined;
@@ -756,6 +860,98 @@ async function maybeStartSoloBotChallenge(
   } catch (error) {
     return `Could not send the TestBotA challenge yet: ${formatError(error)}`;
   }
+}
+
+async function maybeCreatePrivateShowdownLinks(
+  client: Client,
+  config: AppConfig,
+  pokenautsMatches: PokenautsMatchStore,
+  match: PokenautsMatch,
+  requestingPlayerKey: PokenautsPlayerKey | undefined
+): Promise<string | undefined> {
+  if ((match.testMode && !match.privateLinkTest) || match.privateLinksCreated) return undefined;
+  if (!match.teams.challenger || !match.teams.opponent) return undefined;
+
+  try {
+    const challenger = await client.users.fetch(match.challengerDiscordId);
+    const opponent = await client.users.fetch(match.opponentDiscordId);
+    const privateMatch = await createShowdownPrivateLinkMatch(config, match, {
+      challenger: {
+        key: 'challenger',
+        discordId: match.challengerDiscordId,
+        displayName: displayNameForShowdown(challenger),
+      },
+      opponent: {
+        key: 'opponent',
+        discordId: match.opponentDiscordId,
+        displayName: displayNameForShowdown(opponent),
+      },
+    });
+
+    const updatedMatch = pokenautsMatches.markPrivateLinksCreated(
+      match.id,
+      privateMatch.roomId,
+      privateMatch.joinLinks,
+      privateMatch.players
+    );
+    await updatePokenautsMatchMessage(client, config, updatedMatch);
+
+    if (!requestingPlayerKey) {
+      return `${pokeball(config)} Private Showdown links are ready. Click Join Battle on the match card.`;
+    }
+    return buildPrivatePokenautsJoinMessage(updatedMatch, requestingPlayerKey);
+  } catch (error) {
+    return `Could not create private Showdown links yet: ${formatError(error)}`;
+  }
+}
+
+export async function handlePokenautsShowdownResultCallback(
+  requestBody: unknown,
+  authorizationHeader: string | undefined
+): Promise<{statusCode: number; body: Record<string, unknown>}> {
+  if (!activePokenautsContext) {
+    return {statusCode: 503, body: {ok: false, error: 'Discord bot is not ready'}};
+  }
+
+  const {client, config, pokenautsMatches, battleRecords} = activePokenautsContext;
+  const expectedSecret = config.pokenautsShowdownApiSecret;
+  const providedSecret = authorizationHeader?.match(/^Bearer\s+(.+)$/i)?.[1];
+  if (!expectedSecret || providedSecret !== expectedSecret) {
+    return {statusCode: 403, body: {ok: false, error: 'Missing or invalid Pokenauts API secret'}};
+  }
+
+  const payload = requestBody as {
+    matchId?: string;
+    roomId?: string;
+    winner?: string | null;
+    winnerDiscordId?: string | null;
+    tied?: boolean;
+    players?: Array<{
+      key: PokenautsPlayerKey;
+      discordId: string;
+      showdownName: string;
+      slot: string;
+    }>;
+  };
+
+  if (!payload.matchId || !payload.roomId) {
+    return {statusCode: 400, body: {ok: false, error: 'matchId and roomId are required'}};
+  }
+
+  const match = pokenautsMatches.recordPrivateBattleResult({
+    matchId: payload.matchId,
+    roomId: payload.roomId,
+    winner: payload.winner,
+    winnerDiscordId: payload.winnerDiscordId,
+    tied: payload.tied,
+    players: payload.players,
+  });
+  if (!match) return {statusCode: 404, body: {ok: false, error: 'Match not found'}};
+
+  await updatePokenautsMatchMessage(client, config, match);
+  await announcePokenautsResult(client, config, pokenautsMatches, battleRecords, match);
+
+  return {statusCode: 200, body: {ok: true}};
 }
 
 async function announceSoloRoomDetected(
@@ -972,9 +1168,15 @@ function buildPokenautsPublicMatchMessage(
 ): string {
   const challengerTeam = match.teams.challenger;
   const opponentTeam = match.teams.opponent;
-  const roomCommand = `/ashketchup room match_id:${match.id} room_id:<battle-room-id>`;
   const steps =
-    match.testMode
+    match.privateLinkTest
+      ? [
+          '1. Run `@Pokenauts pokemon` in this channel and page until your 3 chosen slots are visible.',
+          '2. Click Submit Team and enter your 3 inventory slot numbers.',
+          '3. AshKetchup will privately give you both Showdown links.',
+          '4. Open each link in a different browser/incognito window, then forfeit one side to test the result.',
+        ]
+      : match.testMode
       ? [
           '1. Go to Showdown and create a username:',
           match.showdownUrl,
@@ -984,26 +1186,15 @@ function buildPokenautsPublicMatchMessage(
         ]
       : match.wager > 0
       ? [
-          '1. Go to Showdown and create a username:',
-          match.showdownUrl,
-          '2. Run `@Pokenauts pokemon` in this channel and page until your 3 chosen slots are visible.',
-          '3. Click Submit Team, enter your Showdown username, then your 3 inventory slot numbers.',
+          '1. Run `@Pokenauts pokemon` in this channel and page until your 3 chosen slots are visible.',
+          '2. Click Submit Team and enter your 3 inventory slot numbers.',
+          '3. When both teams are selected, click Join Battle for your private Showdown link.',
           `4. Wager agreed: loser pays winner ${match.wager} Pokecoins after AshKetchup posts the result.`,
-          '5. Import with Teambuilder, then use the private `/challenge` command exactly as shown.',
-          'After the battle starts, copy the battle room id from the Showdown URL and run:',
-          '```',
-          roomCommand,
-          '```',
         ]
       : [
-          '1. Go to Showdown and create a username:',
-          match.showdownUrl,
-          '2. Run `@Pokenauts pokemon` in this channel and page until your 3 chosen slots are visible.',
-          '3. Click Submit Team to get your private Teambuilder import text and battle instructions.',
-          '4. Use the private `/challenge` command as shown. After the battle starts, copy the battle room id from the Showdown URL and run:',
-          '```',
-          roomCommand,
-          '```',
+          '1. Run `@Pokenauts pokemon` in this channel and page until your 3 chosen slots are visible.',
+          '2. Click Submit Team and enter your 3 inventory slot numbers.',
+          '3. When both teams are selected, click Join Battle for your private Showdown link.',
         ];
 
   return [
@@ -1015,10 +1206,13 @@ function buildPokenautsPublicMatchMessage(
       : '',
     `Status: ${formatMatchStatus(match.status)}`,
     `Format: ${formatMatchFormat(match)}`,
+    match.privateLinksCreated
+      ? `${pokeball(config)} Private Showdown links are ready. Each player can click Join Battle.`
+      : '',
     '',
     'Steps:',
     ...steps,
-    match.testMode
+    match.testMode && !match.privateLinkTest
       ? 'AshKetchup should auto-detect the battle room after you accept.'
       : '',
     '',
@@ -1035,6 +1229,17 @@ function buildPokenautsPublicMatchMessage(
 function buildPokenautsMatchComponents(
   match: PokenautsMatch
 ): Array<ActionRowBuilder<ButtonBuilder>> {
+  if (match.privateLinksCreated && match.status !== 'ended' && match.status !== 'refunded') {
+    return [
+      new ActionRowBuilder<ButtonBuilder>().addComponents(
+        new ButtonBuilder()
+          .setCustomId(`pnm:join:${match.id}`)
+          .setLabel('Join Battle')
+          .setStyle(ButtonStyle.Success)
+      ),
+    ];
+  }
+
   return [
     new ActionRowBuilder<ButtonBuilder>().addComponents(
       new ButtonBuilder()
@@ -1055,6 +1260,18 @@ function buildPrivatePokenautsTeamMessage(
   match: PokenautsMatch,
   playerKey: PokenautsPlayerKey
 ): string {
+  if (!match.testMode || match.privateLinkTest) {
+    if (match.privateJoinLinks[playerKey]) return buildPrivatePokenautsJoinMessage(match, playerKey);
+
+    const team = match.teams[playerKey];
+    return [
+      `${pokeball()} Team locked in.`,
+      'AshKetchup is waiting for both trainers to submit. When the private Showdown links are ready, click Join Battle on the match card.',
+      '',
+      team ? formatPrivateSelectedPokemon(team) : '',
+    ].filter(Boolean).join('\n');
+  }
+
   const team = match.teams[playerKey];
   const opponentKey = playerKey === 'challenger' ? 'opponent' : 'challenger';
   const opponentTeam = match.teams[opponentKey];
@@ -1100,6 +1317,38 @@ function buildPrivatePokenautsTeamMessage(
     '```',
     team.importText,
     '```',
+  ].join('\n');
+}
+
+function buildPrivatePokenautsJoinMessage(
+  match: PokenautsMatch,
+  playerKey: PokenautsPlayerKey
+): string {
+  const team = match.teams[playerKey];
+  const joinLink = match.privateJoinLinks[playerKey];
+  if (!team || !joinLink) return `${pokeball()} Your private Showdown link is not ready yet.`;
+
+  if (match.privateLinkTest) {
+    return [
+      `${pokeball()} Solo private-link test is ready.`,
+      `Your side: ${match.privateJoinLinks.challenger || 'not ready'}`,
+      `AshKetchup test side: ${match.privateJoinLinks.opponent || 'not ready'}`,
+      '',
+      'Open each link in a different browser/incognito window. Forfeit one side when you want to test the result post.',
+      '',
+      'Your selected Pokenauts Pokemon:',
+      formatPrivateSelectedPokemon(team),
+    ].join('\n');
+  }
+
+  return [
+    `${pokeball()} Your private AshKetchup battle link is ready.`,
+    `Go here: ${joinLink}`,
+    '',
+    'Your selected Pokenauts Pokemon:',
+    formatPrivateSelectedPokemon(team),
+    '',
+    'No Teambuilder needed. Open the link and AshKetchup will drop you into the battle with this team.',
   ].join('\n');
 }
 
@@ -1345,6 +1594,16 @@ function formatTeamSelectionStatus(team: PokenautsMatch['teams'][PokenautsPlayer
   return team ? 'selected' : 'waiting';
 }
 
+function formatPrivateSelectedPokemon(team: PokenautsMatch['teams'][PokenautsPlayerKey]): string {
+  if (!team) return 'No team submitted yet.';
+  return team.expectedPokemon
+    .map(
+      pokemon =>
+        `- Slot ${pokemon.slot}: ${pokemon.species} L${pokemon.pokenautsLevel} -> Showdown L${pokemon.showdownLevel}`
+    )
+    .join('\n');
+}
+
 function formatResultTeams(match: PokenautsMatch): string {
   if (match.tied || !match.winnerDiscordId) {
     return [
@@ -1438,6 +1697,10 @@ function getParticipantKey(
 
 function formatChannelName(channel: TextChannel): string {
   return `#${channel.name}`;
+}
+
+function displayNameForShowdown(user: User): string {
+  return user.globalName || user.username;
 }
 
 function formatResultChannelConfig(config: AppConfig): string {
